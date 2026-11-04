@@ -215,6 +215,8 @@ function closeDialog(value) {
 }
 $("dlg").querySelector("form").addEventListener("submit", e => { e.preventDefault(); closeDialog(e.submitter ? e.submitter.value : "ok"); });
 $("dlg").addEventListener("cancel", e => { e.preventDefault(); closeDialog("cancel"); });
+// Cancel is not a submit button: Enter in a field submits with OK, the default button.
+$("dlg-cancel").addEventListener("click", () => closeDialog("cancel"));
 
 /* ---------- views ---------- */
 
