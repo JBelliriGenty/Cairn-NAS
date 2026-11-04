@@ -1,0 +1,17 @@
+[package]
+name = "cairn-nas"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Single-binary admin panel for a Debian + ZFS storage box (built-in login over HTTPS, or behind an authenticating reverse proxy)"
+license = "MIT"
+repository = "https://github.com/JBelliriGenty/Cairn-NAS"
+
+[dependencies]
+tiny_http = { version = "0.12", features = ["ssl-openssl"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
