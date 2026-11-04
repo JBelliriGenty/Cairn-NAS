@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 
 echo "== packages"
 apt-get install -y cargo libssl-dev pkg-config openssl smartmontools \
-  samba nfs-kernel-server zfs-auto-snapshot
+  samba nfs-kernel-server zfs-auto-snapshot avahi-daemon
 
 echo "== build"
 cargo build --release --locked

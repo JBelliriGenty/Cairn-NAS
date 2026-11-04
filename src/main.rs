@@ -80,9 +80,11 @@ impl Config {
         let v: Value = serde_json::from_str(&fs::read_to_string(path).expect("config unreadable")).expect("config: invalid JSON");
         let s = |k: &str, d: &str| v[k].as_str().unwrap_or(d).to_string();
         let mut public = json!({});
-        for k in ["title", "subtitle", "nics", "hosts", "services", "recycle_days"] {
+        for k in ["title", "subtitle", "nics", "hosts", "services"] {
             public[k] = v[k].clone();
         }
+        let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
+        public["recycle_days"] = json!(recycle_days); // the effective value, even when unset
         let f = |k: &str| v["features"][k].as_bool().unwrap_or(false);
         let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools") };
         let firewall_table = v["firewall_table"].as_str().map(String::from);
@@ -124,7 +126,7 @@ impl Config {
             login,
             tls,
             alerts_file: s("alerts_file", "/var/lib/cairn-nas/alerts.json"),
-            recycle_days: v["recycle_days"].as_u64().unwrap_or(30).max(1),
+            recycle_days,
             // A file, so the secret stays out of the config; a short token is refused.
             summary_token: v["summary_token_file"].as_str().map(|f| {
                 let t = fs::read_to_string(f).expect("summary_token_file unreadable").trim().to_string();

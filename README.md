@@ -20,7 +20,9 @@ page embedded: no database, no third-party JavaScript, a few MB of RAM.
   SMB3 minimum, encryption preferred or required, Time Machine, Windows
   Previous Versions, recycle bin, per-share firewall opening (nftables).
   Current SMB sessions.
-- **Time Machine wizard**: account + preset share in one form.
+- **Time Machine wizard**: account + preset share in one form (on an
+  existing dataset, or a new one when `features.pools` is on). Macs find it
+  through Bonjour (avahi).
 - **Accounts**: Linux accounts without login (no shell, no SSH) with a Samba
   password, and groups.
 - **Services**: state, restart, pending updates, journal of the actions done
