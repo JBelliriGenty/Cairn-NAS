@@ -272,7 +272,9 @@ th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--lin
 th { color: var(--muted); font-weight: 500; font-size: 12px; }
 tr:last-child td { border-bottom: 0; }
 tr.auto td { color: var(--muted); }
-td.actions { text-align: right; display: flex; gap: 6px; justify-content: flex-end; }
+/* Stays a table cell (display: flex would detach it from the row's borders). */
+td.actions { text-align: right; }
+td.actions button + button { margin-left: 6px; }
 .svc { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .svc:last-child { border-bottom: 0; }
 .view[data-view="services"]:not([hidden]) { display: grid; gap: 14px; }

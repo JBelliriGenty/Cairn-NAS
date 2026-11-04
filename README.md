@@ -5,7 +5,7 @@
 A web admin panel for a small **Debian + ZFS** NAS. One Rust binary with the
 page embedded: no database, no third-party JavaScript, a few MB of RAM.
 
-> The interface is in French for now. Early days: it runs every day on its
+> Interface in English and French. Early days: it runs every day on its
 > author's NAS, but the standalone installer has seen little testing on
 > fresh machines. Issues and pull requests are welcome.
 
@@ -86,6 +86,7 @@ with your own if you have one.
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
 | `recycle_days` | how long the SMB recycle bin keeps files (30) |
+| `lang` | `en` or `fr`: alerts, `/api/summary`, and the page's default when the browser asks for neither (`en`) |
 | `nics`, `hosts` | display names of network interfaces and client machines |
 | `summary_token_file` | file holding the token (32 characters min.) that opens `GET /api/summary` to dashboards |
 
@@ -134,6 +135,14 @@ Only its own files: `/etc/exports.d/cairn-nas.exports`,
 `/etc/nftables.d/cairn-nas.nft`, and its state in `/var/lib/cairn-nas/`.
 Writes are a closed list of validated actions, run without a shell and
 logged with the account name (`journalctl -u cairn-nas`).
+
+## Translations
+
+The code is written in English. The page picks the viewer's choice (Language
+button), then the server's `lang`, then the browser's language. To add a
+language: copy the `fr` block of `www/i18n.js`, translate its values, add the
+language to `LANGS`; server messages (errors, alerts) have their own table,
+`FR` in `src/main.rs`.
 
 ## Build and test
 

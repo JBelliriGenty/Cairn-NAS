@@ -29,6 +29,7 @@ const INDEX: &str = include_str!("../www/index.html");
 const JS: &str = include_str!("../www/panel.js");
 const CSS: &str = include_str!("../www/panel.css");
 const ICON: &str = include_str!("../www/icon.svg");
+const I18N: &str = include_str!("../www/i18n.js");
 const COMPRESSION: [&str; 5] = ["lz4", "zstd", "zstd-fast", "gzip", "off"];
 
 struct Config {
@@ -53,6 +54,7 @@ struct Config {
     alerts_file: String, // problems already notified (survives restarts)
     recycle_days: u64,
     summary_token: Option<String>, // bearer token for /api/summary only
+    lang: String, // alerts, /api/summary, and the page when the browser asks for no known language
     public: Value,      // what /api/config returns (labels, title…)
 }
 
@@ -80,7 +82,7 @@ impl Config {
         let v: Value = serde_json::from_str(&fs::read_to_string(path).expect("config unreadable")).expect("config: invalid JSON");
         let s = |k: &str, d: &str| v[k].as_str().unwrap_or(d).to_string();
         let mut public = json!({});
-        for k in ["title", "subtitle", "nics", "hosts", "services"] {
+        for k in ["title", "subtitle", "nics", "hosts", "services", "lang"] {
             public[k] = v[k].clone();
         }
         let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
@@ -127,6 +129,7 @@ impl Config {
             tls,
             alerts_file: s("alerts_file", "/var/lib/cairn-nas/alerts.json"),
             recycle_days,
+            lang: s("lang", "en"),
             // A file, so the secret stays out of the config; a short token is refused.
             summary_token: v["summary_token_file"].as_str().map(|f| {
                 let t = fs::read_to_string(f).expect("summary_token_file unreadable").trim().to_string();
@@ -308,7 +311,119 @@ fn summary_json(list: &str, problems: &BTreeMap<String, String>, hwmon: &str) ->
 
 fn summary(cfg: &Config) -> Value {
     let cap = cfg.alerts.as_ref().map_or(85, |a| a.capacity_pct);
-    summary_json(&cmd(&["zpool", "list", "-H", "-p", "-o", "name,health,capacity,size,alloc"]), &problems(cfg, cap), &hwmon())
+    let p = problems(cfg, cap).into_iter().map(|(k, m)| (k, tr(&cfg.lang, &m))).collect();
+    summary_json(&cmd(&["zpool", "list", "-H", "-p", "-o", "name,health,capacity,size,alloc"]), &p, &hwmon())
+}
+
+/* ---------- translations ---------- */
+
+/// Messages are written in English; FR maps each one (`{}` = any text, kept
+/// and itself translated) to French. Specific templates before generic ones.
+const FR: &[(&str, &str)] = &[
+    ("Service {} failed", "Service {} en échec"),
+    ("Pool {} is {} full (threshold {}%)", "Pool {} rempli à {} (seuil {} %)"),
+    ("Pool {}: {}", "Pool {} : {}"),
+    ("Pool {}: {}", "Pool {} : {}"),
+    ("Disk {}: SMART self-test failed", "Disque {} : test SMART en échec"),
+    ("Disk {}: {} = {}", "Disque {} : {} = {}"),
+    ("NVMe critical warning", "avertissement critique NVMe"),
+    ("media errors", "erreurs de lecture"),
+    ("reallocated sectors", "secteurs réalloués"),
+    ("resolved", "rétabli"),
+    ("alert", "alerte"),
+    ("Test message sent from the panel.", "Message de test envoyé depuis le panneau."),
+    ("Samba is not installed: no password to set", "Samba n'est pas installé : pas de mot de passe à définir"),
+    ("feature disabled on this server", "fonction désactivée sur ce serveur"),
+    ("unknown share", "partage inconnu"),
+    ("share name refused (letters, digits, - and _)", "nom de partage refusé (lettres, chiffres, - et _)"),
+    ("path refused: ZFS dataset mount points only", "chemin refusé : point de montage d'un dataset ZFS uniquement"),
+    ("this path is already exported by /etc/exports (managed outside the panel)", "ce chemin est déjà exporté par /etc/exports (géré hors du panneau)"),
+    ("this path is already exported by another share", "ce chemin est déjà exporté par un autre partage"),
+    ("client refused: {}", "client refusé : {}"),
+    ("firewall opening not configured on this server", "ouverture du pare-feu non configurée sur ce serveur"),
+    ("the firewall only accepts IP addresses or networks, not names", "le pare-feu n'accepte que des adresses IP ou des réseaux, pas des noms"),
+    ("access refused: {} (account without a Samba password?)", "accès refusé : {} (compte sans mot de passe Samba ?)"),
+    ("firewall: IP addresses or networks only (32 at most)", "pare-feu : adresses IP ou réseaux seulement (32 au plus)"),
+    ("the folder belongs to root: choose who owns the files", "le dossier appartient à root : choisissez le propriétaire des fichiers"),
+    ("owner refused: accounts with a Samba password only", "propriétaire refusé : compte avec mot de passe Samba uniquement"),
+    ("user name refused or already taken (lowercase, digits, - and _)", "identifiant refusé ou déjà pris (minuscules, chiffres, - et _)"),
+    ("password: 8 to 128 characters", "mot de passe : 8 à 128 caractères"),
+    ("group refused", "groupe refusé"),
+    ("account not managed by the panel", "compte non géré par le panneau"),
+    ("group name refused or already taken", "nom de groupe refusé ou déjà pris"),
+    ("unreadable state", "état illisible"),
+    ("alerts not configured on this server", "alertes non configurées sur ce serveur"),
+    ("group not managed by the panel", "groupe non géré par le panneau"),
+    ("name refused or already taken (lowercase, digits, - and _)", "nom refusé ou déjà pris (minuscules, chiffres, - et _)"),
+    ("address of the Mac: IP or network", "adresse du Mac : IP ou réseau"),
+    ("dedicated dataset only, never the root of a pool", "dataset dédié uniquement, jamais la racine d'un pool"),
+    ("dataset does not exist, and dataset creation is disabled on this server", "dataset inexistant, et la création de datasets est désactivée sur ce serveur"),
+    ("dataset refused (existing parent + simple name)", "dataset refusé (parent existant + nom simple)"),
+    ("this dataset is already shared over SMB", "ce dataset est déjà partagé en SMB"),
+    ("pool name refused or already taken", "nom de pool refusé ou déjà pris"),
+    ("unknown layout", "disposition inconnue"),
+    ("unknown operation", "opération inconnue"),
+    ("unknown pool", "pool inconnu"),
+    ("value refused", "valeur refusée"),
+    ("name refused", "nom refusé"),
+    ("snapshot refused", "snapshot refusé"),
+    ("unknown snapshot", "snapshot inconnu"),
+    ("service not allowed", "service non autorisé"),
+    ("unknown action", "action inconnue"),
+    ("at least one client (32 at most)", "au moins un client (32 au plus)"),
+    ("at least one user or group", "au moins un utilisateur ou un groupe"),
+    ("encryption: desired or required", "chiffrement : desired ou required"),
+    ("Time Machine size: e.g. 500G, 1T, or empty", "taille Time Machine : ex. 500G, 1T, ou vide"),
+    ("remove it from the shares first: {}", "retirez-le d'abord des partages : {}"),
+    ("size: e.g. 500G, 1T", "taille : ex. 500G, 1T"),
+    ("confirmation: type the pool name again", "confirmation : retapez le nom du pool"),
+    ("{}: at least {} free disk(s), each used once", "{} : au moins {} disque(s) libre(s), chacun une seule fois"),
+    ("invalid request", "requête invalide"),
+    ("too many attempts: try again in {} s", "trop d'essais : réessayez dans {} s"),
+    ("wrong user name or password", "identifiant ou mot de passe incorrect"),
+    ("access denied", "accès refusé"),
+    ("invalid labels", "étiquettes invalides"),
+    ("not found", "introuvable"),
+];
+
+/// The message in `lang` ("fr"; anything else = English as written).
+fn tr(lang: &str, msg: &str) -> String {
+    if lang != "fr" {
+        return msg.to_string();
+    }
+    FR.iter().find_map(|(en, fr)| fill(en, msg).map(|caps| {
+        let mut out = String::new();
+        for (i, part) in fr.split("{}").enumerate() {
+            if i > 0 {
+                out += &caps.get(i - 1).map_or(String::new(), |c| tr(lang, c));
+            }
+            out += part;
+        }
+        out
+    })).unwrap_or_else(|| msg.to_string())
+}
+
+/// The texts matching the `{}` of `template` in `msg`, or None when it does not match.
+fn fill<'a>(template: &str, msg: &'a str) -> Option<Vec<&'a str>> {
+    let parts: Vec<&str> = template.split("{}").collect();
+    let mut rest = msg.strip_prefix(parts[0])?;
+    let mut caps = vec![];
+    for (i, part) in parts.iter().enumerate().skip(1) {
+        let at = if i == parts.len() - 1 {
+            rest.strip_suffix(part).map(|r| r.len())?
+        } else {
+            rest.find(part).filter(|_| !part.is_empty())?
+        };
+        caps.push(&rest[..at]);
+        rest = &rest[at + part.len()..];
+    }
+    rest.is_empty().then_some(caps)
+}
+
+/// The page's language (Accept-Language sent by panel.js), else the server's.
+fn lang_of<'a>(cfg: &'a Config, r: &Request) -> &'a str {
+    let h = header(r, "Accept-Language");
+    if h.starts_with("fr") { "fr" } else if h.starts_with("en") { "en" } else { &cfg.lang }
 }
 
 /* ---------- alerts ---------- */
@@ -323,7 +438,7 @@ fn problems(cfg: &Config, capacity_pct: u64) -> BTreeMap<String, String> {
     // "failed" only: a service stopped on purpose (inactive) is not a problem.
     for (svc, st) in cfg.services.iter().zip(cmd(&argv).lines()) {
         if st == "failed" {
-            out.insert(format!("svc:{svc}"), format!("Service {svc} en échec"));
+            out.insert(format!("svc:{svc}"), format!("Service {svc} failed"));
         }
     }
     out
@@ -336,10 +451,10 @@ fn pool_problems(list: &str, status: &str, capacity_pct: u64) -> BTreeMap<String
         let f: Vec<&str> = l.split('\t').collect();
         let [name, health, cap] = f[..] else { continue };
         if health != "ONLINE" {
-            out.insert(format!("pool:{name}:{health}"), format!("Pool {name} : {health}"));
+            out.insert(format!("pool:{name}:{health}"), format!("Pool {name}: {health}"));
         }
         if cap.trim_end_matches('%').parse::<u64>().is_ok_and(|c| c >= capacity_pct) {
-            out.insert(format!("full:{name}"), format!("Pool {name} rempli à {cap} (seuil {capacity_pct} %)"));
+            out.insert(format!("full:{name}"), format!("Pool {name} is {cap} full (threshold {capacity_pct}%)"));
         }
     }
     let mut pool = "";
@@ -348,7 +463,7 @@ fn pool_problems(list: &str, status: &str, capacity_pct: u64) -> BTreeMap<String
             pool = p;
         } else if let Some(e) = l.strip_prefix("errors: ") {
             if e != "No known data errors" {
-                out.insert(format!("errors:{pool}:{e}"), format!("Pool {pool} : {e}"));
+                out.insert(format!("errors:{pool}:{e}"), format!("Pool {pool}: {e}"));
             }
         }
     }
@@ -362,11 +477,11 @@ fn disk_problems(out: &mut BTreeMap<String, String>) {
         let dev = d["dev"].as_str().unwrap_or("?");
         let who = format!("{dev} ({} {})", d["model"].as_str().unwrap_or(""), d["serial"].as_str().unwrap_or(""));
         if d["passed"] == false {
-            out.insert(format!("smart:{dev}"), format!("Disque {who} : test SMART en échec"));
+            out.insert(format!("smart:{dev}"), format!("Disk {who}: SMART self-test failed"));
         }
-        for (k, label) in [("critical", "avertissement critique NVMe"), ("media_errors", "erreurs de lecture"), ("realloc", "secteurs réalloués")] {
+        for (k, label) in [("critical", "NVMe critical warning"), ("media_errors", "media errors"), ("realloc", "reallocated sectors")] {
             if let Some(n) = d[k].as_u64().filter(|n| *n > 0) {
-                out.insert(format!("{k}:{dev}:{n}"), format!("Disque {who} : {label} = {n}"));
+                out.insert(format!("{k}:{dev}:{n}"), format!("Disk {who}: {label} = {n}"));
             }
         }
     }
@@ -374,14 +489,15 @@ fn disk_problems(out: &mut BTreeMap<String, String>) {
 
 fn notify(cfg: &Config, a: &Alerts, title: &str, msg: &str, priority: &str, tags: &str) -> Result<(), String> {
     let host = cfg.public["title"].as_str().unwrap_or("cairn-nas");
-    let (t, p, g) = (format!("title={host} : {title}"), format!("priority={priority}"), format!("tags={tags}"));
+    let (title, msg) = (tr(&cfg.lang, title), tr(&cfg.lang, msg));
+    let (t, p, g) = (format!("title={host}: {title}"), format!("priority={priority}"), format!("tags={tags}"));
     let mut argv = vec!["curl", "-fsS", "-m", "15", "--url-query", &t, "--url-query", &p, "--url-query", &g, "--data-binary", "@-"];
     let hf = a.headers_file.as_ref().map(|f| format!("@{f}"));
     if let Some(h) = &hf {
         argv.extend(["-H", h.as_str()]);
     }
     argv.push(&a.url);
-    run(&argv, Some(msg))
+    run(&argv, Some(&msg))
 }
 
 /// Daily: empties what has been in the shares' recycle bins for more than recycle_days.
@@ -407,12 +523,12 @@ fn alert_loop(cfg: &'static Config) {
     loop {
         let now = problems(cfg, a.capacity_pct);
         for (k, m) in &now {
-            if !sent.contains_key(k) && notify(cfg, a, "alerte", m, "high", "warning").is_ok() {
+            if !sent.contains_key(k) && notify(cfg, a, "alert", m, "high", "warning").is_ok() {
                 sent.insert(k.clone(), m.clone());
             }
         }
         for (k, m) in sent.clone() {
-            if !now.contains_key(&k) && notify(cfg, a, "rétabli", &m, "default", "white_check_mark").is_ok() {
+            if !now.contains_key(&k) && notify(cfg, a, "resolved", &m, "default", "white_check_mark").is_ok() {
                 sent.remove(&k);
             }
         }
@@ -571,7 +687,7 @@ fn load_manage(cfg: &Config) -> Value {
 }
 
 fn render_nfs(state: &Value) -> String {
-    let mut out = String::from("# Géré par cairn-nas (partages créés depuis la page), ne pas modifier à la main.\n");
+    let mut out = String::from("# Managed by cairn-nas (shares created from the page), do not edit by hand.\n");
     for (name, s) in state["nfs"].as_object().into_iter().flatten() {
         let clients: Vec<String> = s["clients"]
             .as_array()
@@ -615,7 +731,7 @@ const RECYCLE: &str = "   recycle:repository = .recycle/%U
 ";
 
 fn render_smb(state: &Value, owner: impl Fn(&str) -> (String, String)) -> String {
-    let mut out = String::from("# Géré par cairn-nas (partages créés depuis la page), ne pas modifier à la main.\n");
+    let mut out = String::from("# Managed by cairn-nas (shares created from the page), do not edit by hand.\n");
     for (name, s) in state["smb"].as_object().into_iter().flatten() {
         let path = s["path"].as_str().unwrap_or("");
         let access: Vec<(&String, &Value)> = s["access"].as_object().into_iter().flatten().collect();
@@ -674,7 +790,7 @@ fn run(argv: &[&str], stdin: Option<&str>) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("{} : {e}", argv[0]))?;
+        .map_err(|e| format!("{}: {e}", argv[0]))?;
     if let Some(mut pipe) = child.stdin.take() {
         if let Some(input) = stdin {
             let _ = pipe.write_all(input.as_bytes());
@@ -690,14 +806,14 @@ fn run(argv: &[&str], stdin: Option<&str>) -> Result<(), String> {
 
 fn write_atomic(path: &str, text: &str) -> Result<(), String> {
     let tmp = format!("{path}.tmp");
-    fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, path)).map_err(|e| format!("{path} : {e}"))
+    fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, path)).map_err(|e| format!("{path}: {e}"))
 }
 
 /// Addresses a share asked to let through the firewall: NFS = its clients when
 /// open_fw, SMB = its "fw" list. Loaded by the admin's nftables config
 /// (include) at boot, and live by apply().
 fn render_fw(state: &Value, table: &str) -> String {
-    let mut out = String::from("# Géré par cairn-nas : adresses ouvertes par les partages créés depuis la page.\n");
+    let mut out = String::from("# Managed by cairn-nas: addresses opened by the shares created from the page.\n");
     let collect = |kind: &str| -> Vec<String> {
         let mut v: Vec<String> = state[kind]
             .as_object()
@@ -767,7 +883,7 @@ fn apply(cfg: &Config, state: &Value) -> Result<(), String> {
 
 fn set_smb_password(name: &str, pass: &str) -> Result<(), String> {
     if !std::path::Path::new("/usr/bin/smbpasswd").exists() {
-        return Err("Samba n'est pas installé : pas de mot de passe à définir".into());
+        return Err("Samba is not installed: no password to set".into());
     }
     run(&["smbpasswd", "-a", "-s", name], Some(&format!("{pass}\n{pass}\n")))
 }
@@ -783,7 +899,7 @@ fn samba_users() -> Vec<String> {
 }
 
 /// What the page needs to draw the shares, accounts and pool forms.
-fn manage_view(cfg: &Config) -> Value {
+fn manage_view(cfg: &Config, lang: &str) -> Value {
     let state = load_manage(cfg);
     let owned_groups = strings(&state, "groups");
     let gr = groups();
@@ -808,7 +924,7 @@ fn manage_view(cfg: &Config) -> Value {
             // Host only: the URL may carry a topic name, the headers a token.
             "target": a.url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(""),
             "capacity_pct": a.capacity_pct,
-            "problems": problems(cfg, a.capacity_pct).into_values().collect::<Vec<_>>(),
+            "problems": problems(cfg, a.capacity_pct).values().map(|m| tr(lang, m)).collect::<Vec<_>>(),
         })),
         "sessions": smb_sessions(),
         "journal": journal(),
@@ -876,7 +992,7 @@ fn manage(cfg: &Config, a: &Value) -> Result<String, String> {
 fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
     let f = cfg.features;
     let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
-    let need = |on: bool| if on { Ok(()) } else { Err("fonction désactivée sur ce serveur".to_string()) };
+    let need = |on: bool| if on { Ok(()) } else { Err("feature disabled on this server".to_string()) };
     let mut state = load_manage(cfg);
     let owned_groups = strings(&state, "groups");
     let pw = passwd();
@@ -889,44 +1005,44 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             need(match kind.as_str() { "nfs" => f.nfs, "smb" => f.smb, _ => false })?;
             if op == "share_delete" {
                 if state[kind.as_str()].as_object_mut().and_then(|m| m.remove(&name)).is_none() {
-                    return Err("partage inconnu".into());
+                    return Err("unknown share".into());
                 }
                 apply(cfg, &state)?;
                 return Ok(format!("op=share_delete kind={kind} name={name}"));
             }
             let path = s("path");
             if !is_share(&name) {
-                return Err("nom de partage refusé (lettres, chiffres, - et _)".into());
+                return Err("share name refused (letters, digits, - and _)".into());
             }
             if !mountpoints().contains(&path) {
-                return Err("chemin refusé : point de montage d'un dataset ZFS uniquement".into());
+                return Err("path refused: ZFS dataset mount points only".into());
             }
             let share = if kind == "nfs" {
                 if admin_exports().contains(&path) {
-                    return Err("ce chemin est déjà exporté par /etc/exports (géré hors du panneau)".into());
+                    return Err("this path is already exported by /etc/exports (managed outside the panel)".into());
                 }
                 if state["nfs"].as_object().into_iter().flatten().any(|(n, x)| n != &name && x["path"] == path.as_str()) {
-                    return Err("ce chemin est déjà exporté par un autre partage".into());
+                    return Err("this path is already exported by another share".into());
                 }
-                let clients = a["clients"].as_array().filter(|c| !c.is_empty() && c.len() <= 32).ok_or("au moins un client (32 au plus)")?;
+                let clients = a["clients"].as_array().filter(|c| !c.is_empty() && c.len() <= 32).ok_or("at least one client (32 at most)")?;
                 let mut out = vec![];
                 for c in clients {
                     let (host, squash) = (c["host"].as_str().unwrap_or(""), c["squash"].as_str().unwrap_or(""));
                     if !is_host(host) || !SQUASH.contains(&squash) || !c["rw"].is_boolean() {
-                        return Err(format!("client refusé : {host}"));
+                        return Err(format!("client refused: {host}"));
                     }
                     out.push(json!({"host": host, "rw": c["rw"], "squash": squash}));
                 }
                 let open_fw = a["open_fw"] == true;
                 if open_fw && cfg.firewall_table.is_none() {
-                    return Err("ouverture du pare-feu non configurée sur ce serveur".into());
+                    return Err("firewall opening not configured on this server".into());
                 }
                 if open_fw && !out.iter().all(|c| c["host"].as_str().is_some_and(is_ip_or_net)) {
-                    return Err("le pare-feu n'accepte que des adresses IP ou des réseaux, pas des noms".into());
+                    return Err("the firewall only accepts IP addresses or networks, not names".into());
                 }
                 json!({"path": path, "clients": out, "open_fw": open_fw})
             } else {
-                let access = a["access"].as_object().filter(|m| !m.is_empty() && m.len() <= 64).ok_or("au moins un utilisateur ou un groupe")?;
+                let access = a["access"].as_object().filter(|m| !m.is_empty() && m.len() <= 64).ok_or("at least one user or group")?;
                 let sm = samba_users();
                 let samba_user = |u: &str| sm.iter().any(|x| x == u) && pw.iter().any(|p| p.0 == u && regular(p.1));
                 for (k, m) in access {
@@ -936,34 +1052,34 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
                         _ => false,
                     };
                     if !known || !matches!(m.as_str(), Some("ro" | "rw")) {
-                        return Err(format!("accès refusé : {} (compte sans mot de passe Samba ?)", &k[k.find(':').map_or(0, |i| i + 1)..]));
+                        return Err(format!("access refused: {} (account without a Samba password?)", &k[k.find(':').map_or(0, |i| i + 1)..]));
                     }
                 }
                 let fw = strings(a, "fw");
                 if !fw.is_empty() && cfg.firewall_table.is_none() {
-                    return Err("ouverture du pare-feu non configurée sur ce serveur".into());
+                    return Err("firewall opening not configured on this server".into());
                 }
                 if fw.len() > 32 || !fw.iter().all(|h| is_ip_or_net(h)) {
-                    return Err("pare-feu : adresses IP ou réseaux seulement (32 au plus)".into());
+                    return Err("firewall: IP addresses or networks only (32 at most)".into());
                 }
                 let encrypt = match s("encrypt").as_str() {
                     "" | "desired" => "desired",
                     "required" => "required",
-                    _ => return Err("chiffrement : desired ou required".into()),
+                    _ => return Err("encryption: desired or required".into()),
                 };
                 let timemachine = a["timemachine"] == true;
                 let tm_max = s("tm_max");
                 if !tm_max.is_empty() && (!is_quota(&tm_max) || tm_max == "none") {
-                    return Err("taille Time Machine : ex. 500G, 1T, ou vide".into());
+                    return Err("Time Machine size: e.g. 500G, 1T, or empty".into());
                 }
                 let owner = s("owner");
                 if owner.is_empty() {
                     if owner_of(&path).0 == "root" {
-                        return Err("le dossier appartient à root : choisissez le propriétaire des fichiers".into());
+                        return Err("the folder belongs to root: choose who owns the files".into());
                     }
                 } else {
                     if !samba_user(&owner) {
-                        return Err("propriétaire refusé : compte avec mot de passe Samba uniquement".into());
+                        return Err("owner refused: accounts with a Samba password only".into());
                     }
                     // The shared directory only, never its content.
                     run(&["chown", &format!("{owner}:"), &path], None)?;
@@ -978,13 +1094,13 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             need(f.users)?;
             let (pass, wanted) = (s("password"), strings(a, "groups"));
             if !is_account(&name) || pw.iter().any(|p| p.0 == name) || gr.iter().any(|g| g.0 == name) {
-                return Err("identifiant refusé ou déjà pris (minuscules, chiffres, - et _)".into());
+                return Err("user name refused or already taken (lowercase, digits, - and _)".into());
             }
             if !is_password(&s("password")) {
-                return Err("mot de passe : 8 à 128 caractères".into());
+                return Err("password: 8 to 128 characters".into());
             }
             if !wanted.iter().all(|g| owned_groups.contains(g)) {
-                return Err("groupe refusé".into());
+                return Err("group refused".into());
             }
             let list = wanted.join(",");
             let mut argv = vec!["useradd", "-M", "-s", "/usr/sbin/nologin", "-c", MARK];
@@ -1004,12 +1120,12 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
         "user_password" | "user_groups" | "user_delete" => {
             need(f.users)?;
             if !owned_user(&name) {
-                return Err("compte non géré par le panneau".into());
+                return Err("account not managed by the panel".into());
             }
             match op.as_str() {
                 "user_password" => {
                     if !is_password(&s("password")) {
-                        return Err("mot de passe : 8 à 128 caractères".into());
+                        return Err("password: 8 to 128 characters".into());
                     }
                     set_smb_password(&name, &s("password"))?;
                     Ok(format!("op=user_password name={name}"))
@@ -1017,7 +1133,7 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
                 "user_groups" => {
                     let wanted = strings(a, "groups");
                     if !wanted.iter().all(|g| owned_groups.contains(g)) {
-                        return Err("groupe refusé".into());
+                        return Err("group refused".into());
                     }
                     run(&["usermod", "-G", &wanted.join(","), &name], None)?;
                     Ok(format!("op=user_groups name={name} groups={}", wanted.join(",")))
@@ -1025,7 +1141,7 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
                 _ => {
                     let used = shares_using(&state, &format!("u:{name}"));
                     if !used.is_empty() {
-                        return Err(format!("retirez-le d'abord des partages : {}", used.join(", ")));
+                        return Err(format!("remove it from the shares first: {}", used.join(", ")));
                     }
                     if f.smb {
                         let _ = run(&["smbpasswd", "-x", &name], None);
@@ -1038,24 +1154,24 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
         "group_create" => {
             need(f.users)?;
             if !is_account(&name) || pw.iter().any(|p| p.0 == name) || gr.iter().any(|g| g.0 == name) {
-                return Err("nom de groupe refusé ou déjà pris".into());
+                return Err("group name refused or already taken".into());
             }
             run(&["groupadd", &name], None)?;
-            state["groups"].as_array_mut().ok_or("état illisible")?.push(json!(name));
+            state["groups"].as_array_mut().ok_or("unreadable state")?.push(json!(name));
             apply(cfg, &state)?;
             Ok(format!("op=group_create name={name}"))
         }
         "group_delete" => {
             need(f.users)?;
             if !owned_groups.contains(&name) {
-                return Err("groupe non géré par le panneau".into());
+                return Err("group not managed by the panel".into());
             }
             let used = shares_using(&state, &format!("g:{name}"));
             if !used.is_empty() {
-                return Err(format!("retirez-le d'abord des partages : {}", used.join(", ")));
+                return Err(format!("remove it from the shares first: {}", used.join(", ")));
             }
             run(&["groupdel", &name], None)?;
-            state["groups"].as_array_mut().ok_or("état illisible")?.retain(|g| g.as_str() != Some(name.as_str()));
+            state["groups"].as_array_mut().ok_or("unreadable state")?.retain(|g| g.as_str() != Some(name.as_str()));
             apply(cfg, &state)?;
             Ok(format!("op=group_delete name={name}"))
         }
@@ -1070,8 +1186,8 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             Ok(format!("op=updates_apply packages={pkgs}"))
         }
         "alert_test" => {
-            let a = cfg.alerts.as_ref().ok_or("alertes non configurées sur ce serveur")?;
-            notify(cfg, a, "test", "Message de test envoyé depuis le panneau.", "default", "bell")?;
+            let a = cfg.alerts.as_ref().ok_or("alerts not configured on this server")?;
+            notify(cfg, a, "test", "Test message sent from the panel.", "default", "bell")?;
             Ok("op=alert_test".into())
         }
         "bonjour" => {
@@ -1086,35 +1202,35 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             need(f.smb && f.users)?;
             let (ds, size, ip) = (s("dataset"), s("size"), s("ip"));
             if !is_account(&name) || pw.iter().any(|p| p.0 == name) || gr.iter().any(|g| g.0 == name) || state["smb"].get(&name).is_some() {
-                return Err("nom refusé ou déjà pris (minuscules, chiffres, - et _)".into());
+                return Err("name refused or already taken (lowercase, digits, - and _)".into());
             }
             if !is_quota(&size) || size == "none" {
-                return Err("taille : ex. 500G, 1T".into());
+                return Err("size: e.g. 500G, 1T".into());
             }
             if !ip.is_empty() && !is_ip_or_net(&ip) {
-                return Err("adresse du Mac : IP ou réseau".into());
+                return Err("address of the Mac: IP or network".into());
             }
             if !is_password(&s("password")) {
-                return Err("mot de passe : 8 à 128 caractères".into());
+                return Err("password: 8 to 128 characters".into());
             }
             let existing: Vec<String> = cmd(&["zfs", "list", "-H", "-o", "name"]).lines().map(String::from).collect();
             let created = !existing.contains(&ds);
             if !ds.contains('/') {
-                return Err("dataset dédié uniquement, jamais la racine d'un pool".into());
+                return Err("dedicated dataset only, never the root of a pool".into());
             }
             if created {
                 if !f.pools {
-                    return Err("dataset inexistant, et la création de datasets est désactivée sur ce serveur".into());
+                    return Err("dataset does not exist, and dataset creation is disabled on this server".into());
                 }
                 let ok = ds.rsplit_once('/').is_some_and(|(parent, leaf)| existing.contains(&parent.to_string()) && is_name(leaf));
                 if !ok {
-                    return Err("dataset refusé (parent existant + nom simple)".into());
+                    return Err("dataset refused (existing parent + simple name)".into());
                 }
                 run(&["zfs", "create", "-o", &format!("quota={size}"), "-o", "recordsize=1M", "-o", "com.sun:auto-snapshot=false", &ds], None)?;
             }
             let path = cmd(&["zfs", "get", "-H", "-o", "value", "mountpoint", &ds]).trim().to_string();
             if state["smb"].as_object().into_iter().flatten().any(|(_, x)| x["path"] == path.as_str()) {
-                return Err("ce dataset est déjà partagé en SMB".into());
+                return Err("this dataset is already shared over SMB".into());
             }
             manage_op(cfg, &json!({"op": "user_create", "name": name, "password": s("password")}))?;
             let share = json!({"op": "share_save", "kind": "smb", "name": name, "path": path, "access": {format!("u:{name}"): "rw"},
@@ -1131,7 +1247,7 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             let existing: Vec<String> = cmd(&["zfs", "list", "-H", "-o", "name"]).lines().map(String::from).collect();
             let ok = ds.rsplit_once('/').is_some_and(|(parent, leaf)| existing.contains(&parent.to_string()) && is_name(leaf));
             if !ok || existing.contains(&ds) || !COMPRESSION.contains(&comp.as_str()) {
-                return Err("dataset refusé (parent existant + nom simple)".into());
+                return Err("dataset refused (existing parent + simple name)".into());
             }
             run(&["zfs", "create", "-o", &format!("compression={comp}"), &ds], None)?;
             Ok(format!("op=dataset_create dataset={ds} compression={comp}"))
@@ -1141,18 +1257,18 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             let (layout, wanted) = (s("layout"), strings(a, "disks"));
             let reserved = ["mirror", "raidz", "draid", "spare", "log", "cache", "special", "dedup"];
             if !is_name(&name) || !name.starts_with(|c: char| c.is_ascii_alphabetic()) || reserved.iter().any(|r| name.starts_with(r)) || pools().contains(&name) {
-                return Err("nom de pool refusé ou déjà pris".into());
+                return Err("pool name refused or already taken".into());
             }
             if s("confirm") != name {
-                return Err("confirmation : retapez le nom du pool".into());
+                return Err("confirmation: type the pool name again".into());
             }
-            let Some((_, min)) = LAYOUTS.iter().find(|(l, _)| *l == layout) else { return Err("disposition inconnue".into()) };
+            let Some((_, min)) = LAYOUTS.iter().find(|(l, _)| *l == layout) else { return Err("unknown layout".into()) };
             let free: Vec<String> = free_disks().iter().filter_map(|d| d["id"].as_str().map(String::from)).collect();
             let mut unique = wanted.clone();
             unique.sort();
             unique.dedup();
             if wanted.len() < *min || unique.len() != wanted.len() || !wanted.iter().all(|d| free.contains(d)) {
-                return Err(format!("{layout} : au moins {min} disque(s) libre(s), chacun une seule fois"));
+                return Err(format!("{layout}: at least {min} free disk(s), each used once"));
             }
             let devs: Vec<String> = wanted.iter().map(|d| format!("/dev/disk/by-id/{d}")).collect();
             let mut argv = vec!["zpool", "create", "-o", "ashift=12", "-O", "compression=lz4", "-O", "atime=off", "-O", "xattr=sa", name.as_str()];
@@ -1163,7 +1279,7 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&argv, None)?;
             Ok(format!("op=pool_create name={name} layout={layout} disks={}", wanted.join(",")))
         }
-        _ => Err("opération inconnue".into()),
+        _ => Err("unknown operation".into()),
     }
 }
 
@@ -1204,14 +1320,14 @@ fn build_argv(pools: &[String], services: &[String], a: &Value, snapshots: impl 
         "scrub_start" | "scrub_stop" => {
             let pool = s("pool");
             if !pools.contains(&pool) {
-                return Err("pool inconnu".into());
+                return Err("unknown pool".into());
             }
             if s("action") == "scrub_start" { v(&["zpool", "scrub", &pool]) } else { v(&["zpool", "scrub", "-s", &pool]) }
         }
         "dataset_set" => {
             let (ds, comp, quota, auto) = (s("dataset"), s("compression"), s("quota"), s("autosnap"));
             if !is_dataset(pools, &ds) || !COMPRESSION.contains(&comp.as_str()) || !is_quota(&quota) || !["", "true", "false"].contains(&auto.as_str()) {
-                return Err("valeur refusée".into());
+                return Err("value refused".into());
             }
             let mut argv = v(&["zfs", "set", &format!("compression={comp}"), &format!("quota={quota}")])?;
             // zfs-auto-snapshot's per-dataset switch (inherited by children).
@@ -1224,7 +1340,7 @@ fn build_argv(pools: &[String], services: &[String], a: &Value, snapshots: impl 
         "snapshot_create" => {
             let (ds, name) = (s("dataset"), s("name"));
             if !is_dataset(pools, &ds) || !is_name(&name) {
-                return Err("nom refusé".into());
+                return Err("name refused".into());
             }
             let snap = format!("{ds}@{name}");
             if a["recursive"].as_bool() == Some(true) { v(&["zfs", "snapshot", "-r", &snap]) } else { v(&["zfs", "snapshot", &snap]) }
@@ -1234,21 +1350,21 @@ fn build_argv(pools: &[String], services: &[String], a: &Value, snapshots: impl 
             let snap = s("snapshot");
             let ok = snap.split_once('@').is_some_and(|(ds, name)| is_dataset(pools, ds) && is_name(name));
             if !ok {
-                return Err("snapshot refusé".into());
+                return Err("snapshot refused".into());
             }
             if !snapshots().contains(&snap) {
-                return Err("snapshot inconnu".into());
+                return Err("unknown snapshot".into());
             }
             v(&["zfs", "destroy", &snap])
         }
         "service_restart" => {
             let svc = s("service");
             if !services.contains(&svc) {
-                return Err("service non autorisé".into());
+                return Err("service not allowed".into());
             }
             v(&["systemctl", "restart", &svc])
         }
-        _ => Err("action inconnue".into()),
+        _ => Err("unknown action".into()),
     }
 }
 
@@ -1367,14 +1483,14 @@ fn respond_cookie(r: Request, code: u16, body: String, ctype: &str, set_cookie: 
     let _ = r.respond(resp);
 }
 
-fn login(l: &Login, mut r: Request) {
+fn login(l: &Login, mut r: Request, lang: &str) {
     let ip = r.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     if !header(&r, "Content-Type").starts_with("application/json") {
-        return respond(r, 400, json!({"error": "requête invalide"}).to_string(), "application/json");
+        return respond(r, 400, json!({"error": tr(lang, "invalid request")}).to_string(), "application/json");
     }
     let wait = blocked_for(&ip);
     if wait > 0 {
-        return respond(r, 429, json!({"error": format!("trop d'essais : réessayez dans {wait} s")}).to_string(), "application/json");
+        return respond(r, 429, json!({"error": tr(lang, &format!("too many attempts: try again in {wait} s"))}).to_string(), "application/json");
     }
     let mut body = String::new();
     let _ = r.as_reader().take(4096).read_to_string(&mut body);
@@ -1384,7 +1500,7 @@ fn login(l: &Login, mut r: Request) {
         record_failure(&ip);
         eprintln!("login refused user={name} ip={ip}");
         std::thread::sleep(Duration::from_secs(1));
-        return respond(r, 401, json!({"error": "identifiant ou mot de passe incorrect"}).to_string(), "application/json");
+        return respond(r, 401, json!({"error": tr(lang, "wrong user name or password")}).to_string(), "application/json");
     }
     FAILS.lock().unwrap_or_else(|e| e.into_inner()).remove(&ip);
     let t = token();
@@ -1396,6 +1512,8 @@ fn login(l: &Login, mut r: Request) {
 
 fn handle(cfg: &Config, mut r: Request) {
     let path = r.url().split('?').next().unwrap_or("").to_string();
+    let lang = lang_of(cfg, &r);
+    let err = |e: &str| json!({"error": tr(lang, e)}).to_string();
     if path == "/healthz" {
         return respond(r, 200, "ok".into(), "text/plain"); // liveness only, no data
     }
@@ -1413,7 +1531,8 @@ fn handle(cfg: &Config, mut r: Request) {
             (Method::Get, "/") => return respond(r, 200, INDEX.into(), "text/html"),
             (Method::Get, "/panel.js") => return respond(r, 200, JS.into(), "text/javascript"),
             (Method::Get, "/panel.css") => return respond(r, 200, CSS.into(), "text/css"),
-            (Method::Post, "/api/login") => return login(l, r),
+            (Method::Get, "/i18n.js") => return respond(r, 200, I18N.into(), "text/javascript"),
+            (Method::Post, "/api/login") => return login(l, r, lang),
             (Method::Post, "/api/logout") => {
                 if let Some(t) = cookie(&r, "cairn_session") {
                     SESSIONS.lock().unwrap_or_else(|e| e.into_inner()).remove(&t);
@@ -1426,13 +1545,14 @@ fn handle(cfg: &Config, mut r: Request) {
     }
     let Some(user) = user(cfg, &r) else {
         let code = if cfg.login.is_some() { 401 } else { 403 };
-        return respond(r, code, "accès refusé".into(), "text/plain");
+        return respond(r, code, tr(lang, "access denied"), "text/plain");
     };
     let method = r.method().clone();
     match (method, path.as_str()) {
         (Method::Get, "/") => respond(r, 200, INDEX.into(), "text/html"),
         (Method::Get, "/panel.js") => respond(r, 200, JS.into(), "text/javascript"),
         (Method::Get, "/panel.css") => respond(r, 200, CSS.into(), "text/css"),
+        (Method::Get, "/i18n.js") => respond(r, 200, I18N.into(), "text/javascript"),
         (Method::Get, "/api/config") => {
             let mut c = cfg.public.clone();
             c["user"] = json!(user);
@@ -1442,10 +1562,10 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Get, "/api/fast") => respond(r, 200, fast(), "text/plain"),
         (Method::Get, "/api/summary") => respond(r, 200, summary(cfg).to_string(), "application/json"),
         (Method::Get, "/api/slow") => respond(r, 200, slow(cfg), "text/plain"),
-        (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg).to_string(), "application/json"),
+        (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg, lang).to_string(), "application/json"),
         (Method::Post, "/api/manage") => {
             if !header(&r, "Content-Type").starts_with("application/json") {
-                return respond(r, 400, json!({"error": "requête invalide"}).to_string(), "application/json");
+                return respond(r, 400, err("invalid request"), "application/json");
             }
             let mut body = String::new();
             let _ = r.as_reader().take(16384).read_to_string(&mut body);
@@ -1457,19 +1577,19 @@ fn handle(cfg: &Config, mut r: Request) {
                 }
                 Err(e) => {
                     eprintln!("manage user={user} op={} refused: {e}", a["op"].as_str().unwrap_or("?"));
-                    respond(r, 400, json!({"error": e}).to_string(), "application/json")
+                    respond(r, 400, err(&e), "application/json")
                 }
             }
         }
         (Method::Post, "/api/ui") => {
             if !header(&r, "Content-Type").starts_with("application/json") {
-                return respond(r, 400, json!({"error": "requête invalide"}).to_string(), "application/json");
+                return respond(r, 400, err("invalid request"), "application/json");
             }
             let mut body = String::new();
             let _ = r.as_reader().take(65536).read_to_string(&mut body);
             let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
             if !valid_ui(&v) {
-                return respond(r, 400, json!({"error": "étiquettes invalides"}).to_string(), "application/json");
+                return respond(r, 400, err("invalid labels"), "application/json");
             }
             match save_ui(&cfg.state_file, &v) {
                 Ok(()) => {
@@ -1482,14 +1602,14 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Post, "/api/action") => {
             // CSRF: a cross-site form cannot send a JSON body without a CORS preflight.
             if !header(&r, "Content-Type").starts_with("application/json") {
-                return respond(r, 400, json!({"error": "requête invalide"}).to_string(), "application/json");
+                return respond(r, 400, err("invalid request"), "application/json");
             }
             let mut body = String::new();
             let _ = r.as_reader().take(4096).read_to_string(&mut body);
             let a: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
             let snaps = || cmd(&["zfs", "list", "-H", "-t", "snapshot", "-o", "name"]).lines().map(String::from).collect();
             match build_argv(&pools(), &cfg.services, &a, snaps) {
-                Err(e) => respond(r, 400, json!({"error": e}).to_string(), "application/json"),
+                Err(e) => respond(r, 400, err(&e), "application/json"),
                 Ok(argv) => match Command::new(&argv[0]).args(&argv[1..]).output() {
                     Ok(o) => {
                         eprintln!("action user={user} argv={argv:?} rc={:?}", o.status.code());
@@ -1504,7 +1624,7 @@ fn handle(cfg: &Config, mut r: Request) {
                 },
             }
         }
-        _ => respond(r, 404, "introuvable".into(), "text/plain"),
+        _ => respond(r, 404, tr(lang, "not found"), "text/plain"),
     }
 }
 
@@ -1662,6 +1782,19 @@ mod tests {
         assert_eq!(s["problems"], 1);
         assert_eq!(s["temp_max_c"], 76);
         assert!(ct_eq("abc", "abc") && !ct_eq("abc", "abd") && !ct_eq("abc", "abcd"));
+    }
+
+    #[test]
+    fn translations() {
+        assert_eq!(tr("fr", "unknown pool"), "pool inconnu");
+        assert_eq!(tr("en", "unknown pool"), "unknown pool");
+        assert_eq!(tr("fr", "Pool tank is 91% full (threshold 85%)"), "Pool tank rempli à 91% (seuil 85 %)");
+        assert_eq!(tr("fr", "Disk sda (X 1): media errors = 3"), "Disque sda (X 1) : erreurs de lecture = 3");
+        assert_eq!(tr("fr", "Disk sda (X 1): SMART self-test failed"), "Disque sda (X 1) : test SMART en échec");
+        assert_eq!(tr("fr", "cannot open /dev/x"), "cannot open /dev/x"); // system text stays as is
+        for (en, fr) in FR {
+            assert_eq!(en.matches("{}").count(), fr.matches("{}").count(), "{en}");
+        }
     }
 
     #[test]

@@ -10,41 +10,42 @@ const SLOW_MS = 15000;  // ZFS, NFS, services, addresses, SMART (cached 5 min se
 const HIST = 90;        // sparkline points (3 min at 2 s)
 const ENTER_MS = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 650; // view entrance (400 ms + 200 ms of stagger, panel.css); renders wait for it
 const COMPRESSION = ["lz4", "zstd", "zstd-fast", "gzip", "off"];
-const PALETTE = [["#16181d", "Noir"], ["#e5484d", "Rouge"], ["#f76b15", "Orange"], ["#f5c518", "Jaune"],
-  ["#30a46c", "Vert"], ["#0090ff", "Bleu"], ["#8e4ec6", "Violet"], ["#e93d82", "Rose"], ["#8b8d98", "Gris"]];
-const VIEWS = { overview: "Vue d'ensemble", systeme: "Système", reseau: "Réseau", disques: "Disques",
-  stockage: "Stockage", partages: "Partages", comptes: "Comptes", services: "Services" };
+// UI strings are English sources translated where they are used (t(), i18n.js), so a language switch applies at once.
+const PALETTE = [["#16181d", "Black"], ["#e5484d", "Red"], ["#f76b15", "Orange"], ["#f5c518", "Yellow"],
+  ["#30a46c", "Green"], ["#0090ff", "Blue"], ["#8e4ec6", "Purple"], ["#e93d82", "Pink"], ["#8b8d98", "Grey"]];
+const VIEWS = { overview: "Overview", systeme: "System", reseau: "Network", disques: "Disks",
+  stockage: "Storage", partages: "Shares", comptes: "Accounts", services: "Services" };
 
 let CFG = { nics: [], hosts: {}, services: [] };
 let UI = { labels: {}, tags: {}, assign: {} };
 const hist = { cpu: [], net: {}, disk: {} };
-let prev = null, F = null, S = null, animUntil = 0;
+let prev = null, F = null, S = null, animUntil = 0, VIEW = null;
 const openGroups = new Set();
 
 /* ---------- helpers ---------- */
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const nf = (n, d = 1) => Number(n).toLocaleString("fr-FR", { maximumFractionDigits: d, minimumFractionDigits: d });
+const nf = (n, d = 1) => Number(n).toLocaleString(LOCALE(), { maximumFractionDigits: d, minimumFractionDigits: d });
 const clamp = (v, a = 0, b = 100) => Math.max(a, Math.min(b, v));
 const push = (arr, v) => { arr.push(v); if (arr.length > HIST) arr.shift(); };
 const last = arr => (arr && arr.length ? arr[arr.length - 1] : 0);
 
 function bytes(n) {
-  const u = ["o", "Ko", "Mo", "Go", "To", "Po"];
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
   let i = 0;
   while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return nf(n, i ? 1 : 0) + " " + u[i];
+  return nf(n, i ? 1 : 0) + " " + t(u[i]);
 }
 function bits(bps) {
   const u = ["b/s", "Kb/s", "Mb/s", "Gb/s"];
   let i = 0;
   while (bps >= 1000 && i < u.length - 1) { bps /= 1000; i++; }
-  return nf(bps, i ? 1 : 0) + " " + u[i];
+  return nf(bps, i ? 1 : 0) + " " + t(u[i]);
 }
 function duration(s) {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return (d ? d + " j " : "") + h + " h " + String(m).padStart(2, "0");
+  return (d ? t("{d} d", { d }) + " " : "") + h + " h " + String(m).padStart(2, "0");
 }
 const lvlTemp = c => (c >= 80 ? "bad" : c >= 65 ? "warn" : "ok");
 
@@ -98,15 +99,16 @@ function toast(msg) {
   setTimeout(() => { t.classList.remove("is-open"); setTimeout(() => t.remove(), cssMs("--toast-close")); }, 3000);
 }
 
+// Accept-Language: the server answers its error messages in the page's language.
 async function get(path) {
-  const r = await fetch(path, { cache: "no-store", redirect: "manual" });
+  const r = await fetch(path, { cache: "no-store", redirect: "manual", headers: { "Accept-Language": LANG } });
   // Session expired: back to the sign-in form (built-in 401, or the proxy's redirect to its portal).
   if ((r.status === 401 && S) || r.type === "opaqueredirect") location.reload();
   if (!r.ok) throw Object.assign(new Error(r.status + " " + (await r.text())), { status: r.status });
   return r.text();
 }
 async function post(path, payload) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), redirect: "manual" });
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "Accept-Language": LANG }, body: JSON.stringify(payload), redirect: "manual" });
   if (r.type === "opaqueredirect") location.reload();
   const res = await r.json().catch(() => ({ error: r.status + " " + r.statusText }));
   if (!r.ok) throw new Error(res.error || r.status);
@@ -128,7 +130,7 @@ function nameBlock(key, sys, def) {
   const custom = UI.labels[key];
   return '<div class="name">' + dot(key) + "<b>" + esc(custom || def || sys) + "</b>" +
     (custom ? '<small class="sys">' + esc(sys) + "</small>" : "") +
-    '<button class="icon" data-edit-item="' + esc(key) + '" data-sys="' + esc(sys) + '" title="Renommer, étiqueter" aria-label="Renommer ' + esc(sys) + '">✎</button></div>';
+    '<button class="icon" data-edit-item="' + esc(key) + '" data-sys="' + esc(sys) + '" title="' + t("Rename, tag") + '" aria-label="' + t("Rename {name}", { name: esc(sys) }) + '">✎</button></div>';
 }
 // Items sharing a tag are kept together (tag order, then original order).
 function byTag(keys, keyOf) {
@@ -139,17 +141,17 @@ function byTag(keys, keyOf) {
 
 function tagRadios(cur) {
   const tags = Object.entries(UI.tags);
-  return '<label class="swatch"><input type="radio" name="tag" value=""' + (cur ? "" : " checked") + '><span class="tagdot none"></span>Aucune</label>' +
+  return '<label class="swatch"><input type="radio" name="tag" value=""' + (cur ? "" : " checked") + '><span class="tagdot none"></span>' + t("None") + "</label>" +
     tags.map(([id, t]) => '<label class="swatch"><input type="radio" name="tag" value="' + esc(id) + '"' + (cur === id ? " checked" : "") +
       '><span class="tagdot" data-color="' + esc(t.color) + '"></span>' + esc(t.name) + "</label>").join("") +
-    (tags.length ? "" : '<p class="sub">Pas encore d\'étiquette : bouton « Étiquettes… » de la barre latérale.</p>');
+    (tags.length ? "" : '<p class="sub">' + t("No tags yet: use the “Tags…” button in the sidebar.") + "</p>");
 }
 
 async function editItem(key, sys) {
-  const fd = await ask("Apparence de " + sys,
-    '<label>Nom affiché<input name="label" maxlength="64" placeholder="' + esc(sys) + '" value="' + esc(UI.labels[key] || "") + '"></label>' +
-    '<fieldset class="swatches"><legend>Étiquette</legend>' + tagRadios(UI.assign[key]) + "</fieldset>" +
-    '<p class="sub">Vide = nom système. Le nom système reste affiché en petit à côté.</p>');
+  const fd = await ask(t("Appearance of {name}", { name: sys }),
+    "<label>" + t("Display name") + '<input name="label" maxlength="64" placeholder="' + esc(sys) + '" value="' + esc(UI.labels[key] || "") + '"></label>' +
+    '<fieldset class="swatches"><legend>' + t("Tag") + "</legend>" + tagRadios(UI.assign[key]) + "</fieldset>" +
+    '<p class="sub">' + t("Empty = system name. The system name stays shown in small print next to it.") + "</p>");
   if (!fd) return;
   const label = fd.get("label").trim(), tag = fd.get("tag");
   if (label) UI.labels[key] = label; else delete UI.labels[key];
@@ -159,14 +161,14 @@ async function editItem(key, sys) {
 
 async function manageTags() {
   const tags = Object.entries(UI.tags);
-  const fd = await ask("Étiquettes",
-    (tags.length ? '<fieldset class="swatches"><legend>Existantes (cocher pour supprimer)</legend>' + tags.map(([id, t]) =>
+  const fd = await ask(t("Tags"),
+    (tags.length ? '<fieldset class="swatches"><legend>' + t("Existing (tick to delete)") + "</legend>" + tags.map(([id, t]) =>
       '<label class="swatch"><input type="checkbox" name="del" value="' + esc(id) + '"><span class="tagdot" data-color="' + esc(t.color) + '"></span>' +
       esc(t.name) + "</label>").join("") + "</fieldset>" : "") +
-    '<label>Nouvelle étiquette<input name="name" maxlength="32" placeholder="ex. Nœud Proxmox"></label>' +
-    '<fieldset class="swatches palette"><legend>Couleur</legend>' + PALETTE.map(([c, n], i) =>
-      '<label class="swatch" title="' + n + '"><input type="radio" name="color" value="' + c + '"' + (i ? "" : " checked") +
-      '><span class="tagdot" data-color="' + c + '"></span></label>').join("") + "</fieldset>", "Enregistrer");
+    "<label>" + t("New tag") + '<input name="name" maxlength="32" placeholder="' + t("e.g. Proxmox node") + '"></label>' +
+    '<fieldset class="swatches palette"><legend>' + t("Colour") + "</legend>" + PALETTE.map(([c, n], i) =>
+      '<label class="swatch" title="' + t(n) + '"><input type="radio" name="color" value="' + c + '"' + (i ? "" : " checked") +
+      '><span class="tagdot" data-color="' + c + '"></span></label>').join("") + "</fieldset>", t("Save"));
   if (!fd) return;
   for (const id of fd.getAll("del")) {
     delete UI.tags[id];
@@ -180,16 +182,16 @@ async function manageTags() {
 async function saveUI() {
   try {
     await post("/api/ui", UI);
-    toast("Enregistré");
+    toast(t("Saved"));
     banner("");
-  } catch (e) { banner("Enregistrement impossible : " + e.message); }
+  } catch (e) { banner(t("Could not save: {err}", { err: e.message })); }
   render(true);
 }
 
 /* ---------- dialog ---------- */
 
 // Native <dialog>; resolves with the FormData, or null if cancelled.
-function ask(title, bodyHtml, okLabel = "Valider", danger = false) {
+function ask(title, bodyHtml, okLabel = t("OK"), danger = false) {
   const d = $("dlg");
   $("dlg-title").textContent = title;
   $("dlg-body").innerHTML = bodyHtml;
@@ -224,7 +226,8 @@ function show(view) {
     s.classList.toggle("enter", on);
   });
   document.querySelectorAll("#nav button").forEach(b => b.setAttribute("aria-current", b.dataset.view === view ? "page" : "false"));
-  $("view-title").textContent = VIEWS[view];
+  $("view-title").textContent = t(VIEWS[view]);
+  VIEW = view;
   if (location.hash.slice(1) !== view) history.replaceState(null, "", "#" + view);
   render(true);
   animUntil = Date.now() + ENTER_MS;
@@ -290,7 +293,7 @@ function fastTick() {
     };
     readOk();
     render();
-  }).catch(e => banner("Lecture impossible : " + e.message, "read"));
+  }).catch(e => banner(t("Read failed: {err}", { err: e.message }), "read"));
 }
 
 /* ---------- slow loop ---------- */
@@ -327,7 +330,7 @@ function slowTick() {
     };
     readOk();
     render(true);
-  }).catch(e => banner("Lecture ZFS/services impossible : " + e.message, "read"));
+  }).catch(e => banner(t("Could not read ZFS/services: {err}", { err: e.message }), "read"));
 }
 
 /* ---------- rendering ---------- */
@@ -343,11 +346,11 @@ function render(force = false) {
 }
 
 function healthOf(h) {
-  if (!h) return { lvl: "unk", txt: "inconnue" };
+  if (!h) return { lvl: "unk", txt: t("unknown") };
   if (h.passed === false || h.critical > 0 || h.media_errors > 0 || (h.spare != null && h.spare_thr != null && h.spare <= h.spare_thr))
-    return { lvl: "bad", txt: "critique" };
-  if (h.used >= 80 || h.temp >= 70 || (h.spare != null && h.spare < 20) || h.realloc > 0) return { lvl: "warn", txt: "à surveiller" };
-  return { lvl: "ok", txt: "bonne" };
+    return { lvl: "bad", txt: t("critical") };
+  if (h.used >= 80 || h.temp >= 70 || (h.spare != null && h.spare < 20) || h.realloc > 0) return { lvl: "warn", txt: t("needs attention") };
+  return { lvl: "ok", txt: t("good") };
 }
 const worst = lvls => (lvls.includes("bad") ? "bad" : lvls.includes("warn") ? "warn" : lvls.includes("unk") ? "unk" : "ok");
 
@@ -355,20 +358,20 @@ function renderChrome() {
   const down = S.services.filter(([, st]) => st !== "active");
   $("pills").innerHTML = Object.values(S.pools).map(p =>
     '<span class="pill ' + (p.health === "ONLINE" ? "ok" : "bad") + '">' + esc(poolName(p.name)) + " " + esc(p.health) + "</span>").join("") +
-    '<span class="pill ' + (down.length ? "warn" : "ok") + '">' + (down.length ? down.length + (down.length > 1 ? " services arrêtés" : " service arrêté") : "services OK") + "</span>";
-  $("meta").textContent = [S.host, "noyau " + S.kernel, "allumé depuis " + duration(F.up), "rafraîchi " + new Date().toLocaleTimeString("fr-FR")].join(" · ");
+    '<span class="pill ' + (down.length ? "warn" : "ok") + '">' + (down.length ? tp(down.length, "{n} service stopped", "{n} services stopped") : t("services OK")) + "</span>";
+  $("meta").textContent = [S.host, t("kernel {v}", { v: S.kernel }), t("up for {d}", { d: duration(F.up) }), t("refreshed {time}", { time: new Date().toLocaleTimeString(LOCALE()) })].join(" · ");
   $("legend").innerHTML = Object.values(UI.tags).map(t => '<span class="legend-item"><span class="tagdot" data-color="' + esc(t.color) + '"></span>' + esc(t.name) + "</span>").join("");
 }
 
 /* overview */
 
-const GAUGES = [["cpu", "Processeur"], ["mem", "Mémoire"], ["pool", "Stockage"], ["temp", "Temp. CPU"]];
+const GAUGES = [["cpu", "Processor"], ["mem", "Memory"], ["pool", "Storage"], ["temp", "CPU temp."]];
 const CIRC = 2 * Math.PI * 42;
 
 function buildGauges() {
   $("gauges").innerHTML = GAUGES.map(([id, label]) =>
     '<article class="card gauge" id="g-' + id + '"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="track" cx="50" cy="50" r="42"/>' +
-    '<circle class="val" cx="50" cy="50" r="42"/></svg><div class="g-text"><strong></strong><span class="label">' + label +
+    '<circle class="val" cx="50" cy="50" r="42"/></svg><div class="g-text"><strong></strong><span class="label">' + t(label) +
     '</span><span class="sub"></span></div></article>').join("");
 }
 function setGauge(id, pct, value, sub, lvl) {
@@ -391,10 +394,10 @@ function renderOverview() {
   const pools = Object.values(S.pools);
   const p = { allocated: pools.reduce((a, x) => a + x.allocated, 0), size: pools.reduce((a, x) => a + x.size, 0) };
   p.capacity = p.size ? p.allocated / p.size * 100 : 0;
-  setGauge("cpu", cpu, nf(cpu, 0) + " %", "charge " + F.load.map(x => nf(x, 2)).join(" · "), cpu > 85 ? "warn" : "");
-  setGauge("mem", used / mp.total * 100, nf(used / 2 ** 30) + " Go", "sur " + bytes(mp.total), "");
+  setGauge("cpu", cpu, nf(cpu, 0) + " %", t("load {v}", { v: F.load.map(x => nf(x, 2)).join(" · ") }), cpu > 85 ? "warn" : "");
+  setGauge("mem", used / mp.total * 100, nf(used / 2 ** 30) + " " + t("GB"), t("of {v}", { v: bytes(mp.total) }), "");
   setGauge("pool", p.capacity, nf(p.capacity, 0) + " %", bytes(p.allocated) + " / " + bytes(p.size), p.capacity >= 80 ? "warn" : "");
-  setGauge("temp", F.cpuT, nf(F.cpuT, 0) + " °C", "seuil 80 °C", lvlTemp(F.cpuT) === "ok" ? "" : lvlTemp(F.cpuT));
+  setGauge("temp", F.cpuT, nf(F.cpuT, 0) + " °C", t("threshold 80 °C"), lvlTemp(F.cpuT) === "ok" ? "" : lvlTemp(F.cpuT));
 
   const disks = Object.keys(S.model).sort();
   const hs = disks.map(d => healthOf(S.health[d]));
@@ -407,35 +410,34 @@ function renderOverview() {
 
   // The screen's question first: is the NAS fine? Name what is not, else sum up what is.
   const issues = [
-    ...pools.filter(x => x.health !== "ONLINE").map(x => "pool " + poolName(x.name) + " " + x.health),
-    ...pools.filter(x => x.capacity >= 80).map(x => "pool " + poolName(x.name) + " plein à " + nf(x.capacity, 0) + " %"),
-    ...disks.filter((d, i) => hs[i].lvl === "bad" || hs[i].lvl === "warn").map(d => "disque " + (UI.labels["disk:" + d] || d) + " " + healthOf(S.health[d]).txt),
-    ...down.map(([n]) => "service " + n + " arrêté"),
+    ...pools.filter(x => x.health !== "ONLINE").map(x => t("pool {name} {state}", { name: poolName(x.name), state: x.health })),
+    ...pools.filter(x => x.capacity >= 80).map(x => t("pool {name} {pct} % full", { name: poolName(x.name), pct: nf(x.capacity, 0) })),
+    ...disks.filter((d, i) => hs[i].lvl === "bad" || hs[i].lvl === "warn").map(d => t("disk {name} {health}", { name: UI.labels["disk:" + d] || d, health: healthOf(S.health[d]).txt })),
+    ...down.map(([n]) => t("service {name} stopped", { name: n })),
   ];
   const vl = worst([...pools.map(x => (x.health === "ONLINE" ? (x.capacity >= 80 ? "warn" : "ok") : "bad")), ...hs.map(h => h.lvl), down.length ? "warn" : "ok"]);
-  const n = (k, one, many) => k + " " + (k > 1 ? many : one);
   $("verdict").className = "verdict " + vl;
   $("verdict").innerHTML = '<span class="dot ' + vl + '"></span>' + esc(issues.length ? issues.join(" · ") :
-    "Tout va bien : " + n(pools.length, "pool en ligne", "pools en ligne") + ", " + good + " / " + n(disks.length, "disque sain", "disques sains") + ", " +
-    n(S.services.length, "service actif", "services actifs"));
+    t("All good: {pools}, {good} / {disks}, {services}", { pools: tp(pools.length, "{n} pool online", "{n} pools online"), good,
+      disks: tp(disks.length, "{n} healthy disk", "{n} healthy disks"), services: tp(S.services.length, "{n} active service", "{n} active services") }));
 
   $("tiles").innerHTML = [
-    tile("disques", "Santé des disques", good + " / " + disks.length + " en bonne santé", worst(hs.map(h => h.lvl)),
-      '<div class="minidisks">' + disks.map((d, i) => '<span class="minidisk ' + hs[i].lvl + '" title="' + esc(d) + " : " + hs[i].txt + '">' +
+    tile("disques", t("Disk health"), t("{good} / {total} in good health", { good, total: disks.length }), worst(hs.map(h => h.lvl)),
+      '<div class="minidisks">' + disks.map((d, i) => '<span class="minidisk ' + hs[i].lvl + '" title="' + esc(t("{name}: {value}", { name: d, value: hs[i].txt })) + '">' +
         esc(UI.labels["disk:" + d] || d) + "<small>" + nf(S.health[d]?.temp ?? F.nvmeT[d] ?? 0, 0) + " °C</small></span>").join("") + "</div>"),
-    tile("stockage", pools.length > 1 ? pools.length + " pools ZFS" : "Pool ZFS", bytes(pools.reduce((a, x) => a + x.free, 0)) + " libres",
+    tile("stockage", pools.length > 1 ? t("{n} ZFS pools", { n: pools.length }) : t("ZFS pool"), t("{v} free", { v: bytes(pools.reduce((a, x) => a + x.free, 0)) }),
       pools.every(x => x.health === "ONLINE") ? "ok" : "bad", pools.map(x => '<div class="meter ' + (x.capacity >= 80 ? "warn" : "ok") + '"><span>' +
         esc(poolName(x.name)) + " · " + esc(x.health) + '</span><div class="bar"><i data-w="' + x.capacity + '"></i></div><b>' + nf(x.capacity, 0) + " %</b></div>").join("")),
-    tile("reseau", "Réseau (toutes interfaces)", "↓ " + bits(last(rx)) + " · ↑ " + bits(last(tx)), "", spark([rx, tx], 8000, true)),
-    tile("services", "Services", (S.services.length - down.length) + " / " + S.services.length + " actifs", down.length ? "warn" : "ok",
-      '<div class="svcdots">' + S.services.map(([n, st]) => '<span class="dot ' + (st === "active" ? "ok" : "bad") + '" title="' + esc(n) + " : " + esc(st) + '"></span>').join("") + "</div>" +
-      (down.length ? '<p class="sub">Arrêtés : ' + down.map(([n]) => esc(n)).join(", ") + "</p>" : "")),
+    tile("reseau", t("Network (all interfaces)"), "↓ " + bits(last(rx)) + " · ↑ " + bits(last(tx)), "", spark([rx, tx], 8000, true)),
+    tile("services", t("Services"), t("{up} / {total} active", { up: S.services.length - down.length, total: S.services.length }), down.length ? "warn" : "ok",
+      '<div class="svcdots">' + S.services.map(([n, st]) => '<span class="dot ' + (st === "active" ? "ok" : "bad") + '" title="' + esc(t("{name}: {value}", { name: n, value: st })) + '"></span>').join("") + "</div>" +
+      (down.length ? '<p class="sub">' + t("Stopped: {list}", { list: down.map(([n]) => esc(n)).join(", ") }) + "</p>" : "")),
   ].join("");
   // Secondary facts: one line of links instead of half-empty tiles.
   $("facts").innerHTML = [
-    ["partages", "NFS : " + S.exports.length + " exports · " + conn + " / " + clients.size + " clients connectés", conn ? " ok" : ""],
-    ["systeme", "Allumé depuis " + duration(F.up), ""],
-    ["systeme", "ARC : " + nf(F.a.hits + F.a.misses ? 100 * F.a.hits / (F.a.hits + F.a.misses) : 0, 1) + " % de succès", ""],
+    ["partages", t("NFS: {exports} exports · {conn} / {clients} clients connected", { exports: S.exports.length, conn, clients: clients.size }), conn ? " ok" : ""],
+    ["systeme", t("Up for {d}", { d: duration(F.up) }), ""],
+    ["systeme", t("ARC: {pct} % hit rate", { pct: nf(F.a.hits + F.a.misses ? 100 * F.a.hits / (F.a.hits + F.a.misses) : 0, 1) }), ""],
   ].map(([v, t, c]) => '<button class="chip' + c + '" data-goto="' + v + '">' + esc(t) + "</button>").join("");
 }
 function tile(view, title, value, lvl, extra) {
@@ -446,9 +448,9 @@ function tile(view, title, value, lvl, extra) {
 /* system */
 
 function buildSystem() {
-  $("cpu-card").innerHTML = '<div class="row"><span class="label">Processeur</span><strong class="big" id="cpu-val"></strong></div>' +
-    '<div id="cpu-chart" class="chart"></div><div class="label">Par thread</div><div class="threads" id="threads"></div>';
-  $("mem-card").innerHTML = '<div class="row"><span class="label">Mémoire</span><strong class="big" id="mem-val"></strong></div>' +
+  $("cpu-card").innerHTML = '<div class="row"><span class="label">' + t("Processor") + '</span><strong class="big" id="cpu-val"></strong></div>' +
+    '<div id="cpu-chart" class="chart"></div><div class="label">' + t("Per thread") + '</div><div class="threads" id="threads"></div>';
+  $("mem-card").innerHTML = '<div class="row"><span class="label">' + t("Memory") + '</span><strong class="big" id="mem-val"></strong></div>' +
     '<div class="stack" id="mem-stack"><i class="s-apps"></i><i class="s-arc"></i><i class="s-cache"></i></div><dl class="legend-dl" id="mem-legend"></dl>';
 }
 
@@ -467,26 +469,26 @@ function renderSystem() {
   $("cpu-chart").innerHTML = spark([hist.cpu], 100, true);
 
   const mp = memParts();
-  $("mem-val").textContent = nf((mp.total - mp.free - mp.cache) / 2 ** 30) + " / " + nf(mp.total / 2 ** 30) + " Go";
+  $("mem-val").textContent = nf((mp.total - mp.free - mp.cache) / 2 ** 30) + " / " + nf(mp.total / 2 ** 30) + " " + t("GB");
   const seg = $("mem-stack").children;
   [mp.apps, mp.arc, mp.cache].forEach((v, i) => { seg[i].style.width = (v / mp.total * 100).toFixed(2) + "%"; });
-  $("mem-legend").innerHTML = [["s-apps", "Applications", mp.apps], ["s-arc", "Cache ZFS (ARC)", mp.arc], ["s-cache", "Cache système", mp.cache], ["s-free", "Libre", mp.free]]
-    .map(([c, n, v]) => '<dt><i class="' + c + '"></i>' + n + "</dt><dd>" + bytes(v) + "</dd>").join("");
+  $("mem-legend").innerHTML = [["s-apps", "Applications", mp.apps], ["s-arc", "ZFS cache (ARC)", mp.arc], ["s-cache", "System cache", mp.cache], ["s-free", "Free", mp.free]]
+    .map(([c, n, v]) => '<dt><i class="' + c + '"></i>' + t(n) + "</dt><dd>" + bytes(v) + "</dd>").join("");
 
   const threads = F.cores.length || 1;
-  $("load-card").innerHTML = '<span class="label">Charge (sur ' + threads + " threads)</span>" +
+  $("load-card").innerHTML = '<span class="label">' + t("Load (over {n} threads)", { n: threads }) + "</span>" +
     ["1 min", "5 min", "15 min"].map((n, i) => '<div class="meter"><span>' + n + '</span><div class="bar"><i data-w="' + (F.load[i] / threads * 100) +
       '"></i></div><b>' + nf(F.load[i], 2) + "</b></div>").join("") +
-    '<dl class="legend-dl"><dt>Allumé depuis</dt><dd>' + duration(F.up) + "</dd><dt>Noyau</dt><dd>" + esc(S.kernel) + "</dd>" +
-    "<dt>ARC (succès)</dt><dd>" + nf(F.a.hits + F.a.misses ? 100 * F.a.hits / (F.a.hits + F.a.misses) : 0, 1) + " %</dd></dl>";
+    '<dl class="legend-dl"><dt>' + t("Uptime") + "</dt><dd>" + duration(F.up) + "</dd><dt>" + t("Kernel") + "</dt><dd>" + esc(S.kernel) + "</dd>" +
+    "<dt>" + t("ARC (hit rate)") + "</dt><dd>" + nf(F.a.hits + F.a.misses ? 100 * F.a.hits / (F.a.hits + F.a.misses) : 0, 1) + " %</dd></dl>";
 
   const rows = [];
   const core = F.temps.filter(x => x.name === "coretemp" || x.name === "k10temp");
-  if (core.length) rows.push(["CPU (paquet)", F.cpuT], ["CPU (cœur le plus chaud)", Math.max(...core.map(x => x.c))]);
+  if (core.length) rows.push([t("CPU (package)"), F.cpuT], [t("CPU (hottest core)"), Math.max(...core.map(x => x.c))]);
   F.temps.filter(x => x.name === "spd5118").forEach((x, i) => rows.push(["RAM" + (i ? " " + (i + 1) : ""), x.c]));
   F.temps.filter(x => /^(en|eth)/.test(x.name)).forEach(x => rows.push([(UI.labels["nic:" + x.name] || x.name) + " · " + x.label, x.c]));
   Object.keys(F.nvmeT).sort().forEach(d => rows.push([(UI.labels["disk:" + d] || d), F.nvmeT[d]]));
-  $("temp-card").innerHTML = '<span class="label">Températures</span><div class="temps">' + rows.map(([n, c]) =>
+  $("temp-card").innerHTML = '<span class="label">' + t("Temperatures") + '</span><div class="temps">' + rows.map(([n, c]) =>
     '<div class="meter ' + lvlTemp(c) + '"><span>' + esc(n) + '</span><div class="bar"><i data-w="' + c + '"></i></div><b>' + nf(c, 0) + " °C</b></div>").join("") + "</div>";
 }
 
@@ -501,7 +503,7 @@ function renderNet() {
     const ad = S.addrs[n] || { up: false, ips: [] };
     const pct = speed > 0 ? Math.max(rx, tx) / (speed * 1e6) * 100 : 0;
     return '<article class="card nic' + (ad.up ? "" : " down") + (tagOf("nic:" + n) ? " tagged" : "") + '"' + tagAttr("nic:" + n) + ">" +
-      '<div class="row">' + nameBlock("nic:" + n, n, n) + '<span class="tag">' + (speed > 0 ? (speed >= 1000 ? speed / 1000 + " Gb" : speed + " Mb") : "pas de lien") + "</span></div>" +
+      '<div class="row">' + nameBlock("nic:" + n, n, n) + '<span class="tag">' + (speed > 0 ? (speed >= 1000 ? speed / 1000 + " Gb" : speed + " Mb") : t("no link")) + "</span></div>" +
       '<div class="sub">' + esc(desc[n] || "") + (ad.ips.length ? " · " + esc(ad.ips.join(", ")) : "") + "</div>" +
       '<div class="rates"><span class="rx">↓ ' + bits(rx) + '</span><span class="tx">↑ ' + bits(tx) + "</span></div>" +
       (speed > 0 ? '<div class="bar thin"><i data-w="' + pct + '"></i></div>' : "") +
@@ -534,13 +536,13 @@ function renderDisks() {
   const groups = [];
   for (const root of Object.values(S.statusOf).flatMap(poolTree)) {
     for (const v of root.children) {
-      groups.push({ key: root.name + "/" + v.name, title: poolName(root.name) + (v.children.length ? " · " + v.name : " · disque seul"),
+      groups.push({ key: root.name + "/" + v.name, title: poolName(root.name) + (v.children.length ? " · " + v.name : " · " + t("single disk")),
         state: v.state, pool: S.pools[root.name], members: leaves(v).map(l => ({ dev: devOf(l.name), id: l.name, state: l.state, err: l.err })) });
     }
   }
   const inPool = new Set(groups.flatMap(g => g.members.map(m => m.dev)));
   const other = Object.keys(S.model).filter(d => !inPool.has(d)).sort();
-  if (other.length) groups.push({ key: "other", title: "Hors pool", state: "", members: other.map(d => ({ dev: d, id: d, state: "", err: [0, 0, 0] })) });
+  if (other.length) groups.push({ key: "other", title: t("Not in a pool"), state: "", members: other.map(d => ({ dev: d, id: d, state: "", err: [0, 0, 0] })) });
 
   $("groups").innerHTML = groups.map(g => {
     const devs = g.members.map(m => m.dev);
@@ -551,16 +553,16 @@ function renderDisks() {
     const lvl = worst([...hs.map(h => h.lvl), g.state && g.state !== "ONLINE" ? "bad" : "ok", errs ? "warn" : "ok"]);
     const cap = devs.reduce((acc, d) => acc + (S.health[d]?.capacity || 0), 0);
     return '<article class="card group ' + lvl + '"><div class="row"><span class="dot ' + (lvl === "ok" ? "ok" : lvl === "bad" ? "bad" : "warn") + '"></span>' +
-      "<b>" + esc(g.title) + '</b><span class="tag">' + devs.length + " disque" + (devs.length > 1 ? "s" : "") + " · " + bytes(cap) + " bruts</span>" +
+      "<b>" + esc(g.title) + '</b><span class="tag">' + tp(devs.length, "{n} disk · {size} raw", "{n} disks · {size} raw", { size: bytes(cap) }) + "</span>" +
       (g.state ? '<span class="pill ' + (g.state === "ONLINE" ? "ok" : "bad") + '">' + esc(g.state) + "</span>" : "") + "</div>" +
       '<div class="stats">' +
-      stat("Lecture", bytes(last(r)) + "/s", "rx") + stat("Écriture", bytes(last(w)) + "/s", "tx") +
-      stat("Température max", temps.length ? nf(Math.max(...temps), 0) + " °C" : "—", lvlTemp(Math.max(0, ...temps))) +
-      stat("Santé", hs.filter(h => h.lvl === "ok").length + " / " + hs.length + " bonne", lvl) +
-      stat("Erreurs ZFS", String(errs), errs ? "warn" : "") +
-      (g.pool ? stat("Pool occupé", nf(g.pool.capacity, 0) + " %", "") : "") + "</div>" +
+      stat(t("Read"), bytes(last(r)) + "/s", "rx") + stat(t("Write"), bytes(last(w)) + "/s", "tx") +
+      stat(t("Max temperature"), temps.length ? nf(Math.max(...temps), 0) + " °C" : "—", lvlTemp(Math.max(0, ...temps))) +
+      stat(t("Health"), t("{ok} / {total} good", { ok: hs.filter(h => h.lvl === "ok").length, total: hs.length }), lvl) +
+      stat(t("ZFS errors"), String(errs), errs ? "warn" : "") +
+      (g.pool ? stat(t("Pool used"), nf(g.pool.capacity, 0) + " %", "") : "") + "</div>" +
       spark([r, w], 1e5, true) +
-      '<details data-group="' + esc(g.key) + '"' + (openGroups.has(g.key) ? " open" : "") + "><summary>Détail disque par disque</summary>" +
+      '<details data-group="' + esc(g.key) + '"' + (openGroups.has(g.key) ? " open" : "") + "><summary>" + t("Disk by disk") + "</summary>" +
       '<div class="grid disks">' + g.members.map(diskCard).join("") + "</div></details></article>";
   }).join("");
 }
@@ -572,16 +574,16 @@ function diskCard(m) {
   const key = "disk:" + d;
   const tc = h?.temp ?? F.nvmeT[d];
   const kv = [
-    ["Santé", hl.txt, hl.lvl], ["Température", tc != null ? nf(tc, 0) + " °C" : "—", lvlTemp(tc || 0)],
-    ["Usure", h?.used != null ? h.used + " %" : "—", h?.used >= 80 ? "warn" : ""], ["Réserve", h?.spare != null ? h.spare + " %" : "—", ""],
-    ["Heures", h?.hours != null ? String(h.hours) : "—", ""], ["Écrit", h?.written != null ? bytes(h.written * 512000) : "—", ""],
-    ["Arrêts brutaux", h?.unsafe != null ? String(h.unsafe) : "—", ""], ["Erreurs média", h?.media_errors != null ? String(h.media_errors) : "—", h?.media_errors ? "bad" : ""],
-    ["Erreurs ZFS L/É/S", m.err.join(" / "), m.err.some(x => x) ? "warn" : ""],
+    [t("Health"), hl.txt, hl.lvl], [t("Temperature"), tc != null ? nf(tc, 0) + " °C" : "—", lvlTemp(tc || 0)],
+    [t("Wear"), h?.used != null ? h.used + " %" : "—", h?.used >= 80 ? "warn" : ""], [t("Spare"), h?.spare != null ? h.spare + " %" : "—", ""],
+    [t("Power-on hours"), h?.hours != null ? String(h.hours) : "—", ""], [t("Written"), h?.written != null ? bytes(h.written * 512000) : "—", ""],
+    [t("Unsafe shutdowns"), h?.unsafe != null ? String(h.unsafe) : "—", ""], [t("Media errors"), h?.media_errors != null ? String(h.media_errors) : "—", h?.media_errors ? "bad" : ""],
+    [t("ZFS errors R/W/C"), m.err.join(" / "), m.err.some(x => x) ? "warn" : ""],
   ];
   return '<article class="card disk' + (tagOf(key) ? " tagged" : "") + '"' + tagAttr(key) + '><div class="row">' + nameBlock(key, d, d) +
     '<span class="pill ' + hl.lvl + '">' + esc(hl.txt) + "</span></div>" +
     '<div class="sub">' + esc(S.model[d] || h?.model || "") + (h?.serial ? " · " + esc(h.serial) : "") + "</div>" +
-    '<div class="rates"><span class="rx">lecture ' + bytes(last(hi.r)) + '/s</span><span class="tx">écriture ' + bytes(last(hi.w)) + "/s</span></div>" +
+    '<div class="rates"><span class="rx">' + t("read {rate}/s", { rate: bytes(last(hi.r)) }) + '</span><span class="tx">' + t("write {rate}/s", { rate: bytes(last(hi.w)) }) + "</span></div>" +
     spark([hi.r, hi.w], 1e5) + '<dl class="kv">' + kv.map(([k, v, c]) => "<dt>" + k + '</dt><dd class="' + c + '">' + esc(v) + "</dd>").join("") + "</dl></article>";
 }
 
@@ -590,37 +592,38 @@ function diskCard(m) {
 const poolName = n => UI.labels["pool:" + n] || n;
 
 function scanText(status) {
-  const scan = (status.match(/^\s*scan: ([\s\S]*?)\nconfig:/m) || [, "aucun scrub encore"])[1].replace(/\n\s+/g, " ").trim();
+  const scan = (status.match(/^\s*scan: ([\s\S]*?)\nconfig:/m) || [, t("no scrub yet")])[1].replace(/\n\s+/g, " ").trim();
   return { text: scan, running: /in progress/.test(scan) };
 }
 
 function renderStorage() {
   $("storage-actions").innerHTML = FEAT().pools
-    ? '<button class="primary" data-act="ds-new">Nouveau dataset</button><button data-act="pool-new">Nouveau pool</button>' : "";
+    ? '<button class="primary" data-act="ds-new">' + t("New dataset") + '</button><button data-act="pool-new">' + t("New pool") + "</button>" : "";
   $("pools").innerHTML = Object.values(S.pools).map(p => {
     const st = S.statusOf[p.name] || "", scan = scanText(st);
     const errors = (st.match(/^errors: (.*)$/m) || [, "?"])[1];
-    const vdevs = poolTree(st).flatMap(t => t.children).map(v => v.children.length ? v.name.replace(/-\d+$/, "") + " × " + leaves(v).length : "disque seul");
+    const vdevs = poolTree(st).flatMap(t => t.children).map(v => v.children.length ? v.name.replace(/-\d+$/, "") + " × " + leaves(v).length : t("single disk"));
     const key = "pool:" + p.name;
     return '<article class="card' + (tagOf(key) ? " tagged" : "") + '"' + tagAttr(key) + '><div class="row"><span class="dot ' + (p.health === "ONLINE" ? "ok" : "bad") + '"></span>' +
     nameBlock(key, p.name, p.name) + '<span class="tag">' + esc(vdevs.join(" + ")) + "</span></div>" +
     '<div class="bar big"><i data-w="' + p.capacity + '"></i></div>' +
-    '<div class="stats">' + stat("Occupé", bytes(p.allocated), "") + stat("Libre", bytes(p.free), "") + stat("Taille brute", bytes(p.size), "") +
-    stat("Fragmentation", p.fragmentation + " %", "") + (errors.startsWith("No known") ? stat("Erreurs", "Aucune", "ok") : stat("Erreurs", errors, "bad")) + "</div>" +
-    '<p class="sub">Dernier scrub : ' + esc(scan.text) + "</p>" +
+    '<div class="stats">' + stat(t("Allocated"), bytes(p.allocated), "") + stat(t("Free"), bytes(p.free), "") + stat(t("Raw size"), bytes(p.size), "") +
+    stat(t("Fragmentation"), p.fragmentation + " %", "") + (errors.startsWith("No known") ? stat(t("Errors"), t("None"), "ok") : stat(t("Errors"), errors, "bad")) + "</div>" +
+    '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" +
     '<button data-act="scrub" data-pool="' + esc(p.name) + '" data-running="' + scan.running + '" class="' + (scan.running ? "danger" : "primary") + '">' +
-    (scan.running ? "Arrêter le scrub" : "Lancer un scrub") + "</button></article>";
+    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button></article>";
   }).join("");
 
   const rows = byTag(S.datasets, r => "ds:" + r[0]);
-  $("datasets").innerHTML = "<thead><tr><th>Dataset</th><th>Utilisé</th><th>Disponible</th><th>Compression</th><th>Gain</th><th>Bloc</th><th>Quota</th>" + (FEAT().autosnap ? "<th>Snapshots auto</th>" : "") + "<th></th></tr></thead><tbody>" +
+  $("datasets").innerHTML = "<thead><tr>" + ["Dataset", "Used", "Available", "Compression", "Ratio", "Block size", "Quota"].concat(FEAT().autosnap ? ["Auto snapshots"] : [], [""])
+    .map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
     rows.map(([name, used, avail, , ratio, comp, rs, quota, , auto]) =>
       "<tr><td>" + nameBlock("ds:" + name, name, name) + "</td><td>" + bytes(Number(used)) + "</td><td>" + bytes(Number(avail)) + "</td><td>" + esc(comp) +
       "</td><td>× " + nf(Number(ratio), 2) + "</td><td>" + bytes(Number(rs)) + "</td><td>" + (quota === "0" ? "—" : bytes(Number(quota))) +
-      (FEAT().autosnap ? "</td><td>" + (auto === "true" ? "oui" : "non") : "") +
+      (FEAT().autosnap ? "</td><td>" + (auto === "true" ? t("yes") : t("no")) : "") +
       '</td><td class="actions"><button data-act="ds-edit" data-ds="' + esc(name) + '" data-comp="' + esc(comp) + '" data-quota="' + (quota === "0" ? "none" : esc(quota)) +
       '" data-auto="' + (auto === "true" ? "true" : "false") +
-      '">Modifier</button><button data-act="ds-snap" data-ds="' + esc(name) + '">Snapshot</button></td></tr>').join("") + "</tbody>";
+      '">' + t("Edit") + '</button><button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button></td></tr>").join("") + "</tbody>";
 
   // Rotating snapshots (zfs-auto-snapshot) are summed up per label, not listed.
   const auto = {}, manual = [];
@@ -631,40 +634,40 @@ function renderStorage() {
     const a = auto[label] = auto[label] || { n: 0, used: 0, last: 0 };
     a.n++; a.used += Number(s[1]); a.last = Math.max(a.last, Number(s[2]));
   }
-  const when = t => new Date(t * 1000).toLocaleString("fr-FR");
+  const when = t => new Date(t * 1000).toLocaleString(LOCALE());
   // Manual snapshots sharing a name (one recursive snapshot, a migration) make one row.
   const named = {};
   for (const s of manual.reverse()) (named[s[0].split("@")[1]] = named[s[0].split("@")[1]] || []).push(s);
   $("snaps").innerHTML = !S.snapshots.length
-    ? '<tbody><tr><td class="sub">Aucun snapshot. Bouton « Snapshot » sur un dataset pour en créer un.</td></tr></tbody>'
-    : "<thead><tr><th>Snapshot</th><th>Taille propre</th><th>Créé le</th><th></th></tr></thead><tbody>" +
+    ? '<tbody><tr><td class="sub">' + t("No snapshots. Use the “Snapshot” button on a dataset to create one.") + "</td></tr></tbody>"
+    : "<thead><tr><th>" + t("Snapshot") + "</th><th>" + t("Unique size") + "</th><th>" + t("Created") + "</th><th></th></tr></thead><tbody>" +
       Object.entries(named).map(([snap, list]) => list.length === 1
         ? "<tr><td>" + esc(list[0][0]) + "</td><td>" + bytes(Number(list[0][1])) + "</td><td>" + when(Number(list[0][2])) +
-          '</td><td class="actions"><button class="danger" data-act="snap-del" data-snap="' + esc(list[0][0]) + '">Supprimer</button></td></tr>'
-        : '<tr><td title="' + esc(list.map(s => s[0]).join(", ")) + '">@' + esc(snap) + ' <small class="sys">' + list.length + " datasets</small></td><td>" +
+          '</td><td class="actions"><button class="danger" data-act="snap-del" data-snap="' + esc(list[0][0]) + '">' + t("Delete") + "</button></td></tr>"
+        : '<tr><td title="' + esc(list.map(s => s[0]).join(", ")) + '">@' + esc(snap) + ' <small class="sys">' + tp(list.length, "{n} dataset", "{n} datasets") + "</small></td><td>" +
           bytes(list.reduce((a, s) => a + Number(s[1]), 0)) + "</td><td>" + when(Math.max(...list.map(s => Number(s[2])))) +
-          '</td><td class="actions"><button class="danger" data-act="snap-del-many" data-snap="' + esc(snap) + '">Supprimer les ' + list.length + "</button></td></tr>").join("") +
-      Object.entries(auto).map(([label, a]) => '<tr class="auto"><td>zfs-auto-snap · ' + esc(label) + " — " + a.n + (a.n > 1 ? " snapshots" : " snapshot") + "</td><td>" + bytes(a.used) +
-        "</td><td>dernier " + when(a.last) + '</td><td class="sub">rotation automatique</td></tr>').join("") + "</tbody>";
+          '</td><td class="actions"><button class="danger" data-act="snap-del-many" data-snap="' + esc(snap) + '">' + t("Delete all {n}", { n: list.length }) + "</button></td></tr>").join("") +
+      Object.entries(auto).map(([label, a]) => '<tr class="auto"><td>zfs-auto-snap · ' + esc(label) + " — " + tp(a.n, "{n} snapshot", "{n} snapshots") + "</td><td>" + bytes(a.used) +
+        "</td><td>" + t("last {when}", { when: when(a.last) }) + '</td><td class="sub">' + t("automatic rotation") + "</td></tr>").join("") + "</tbody>";
 }
 
 /* NFS and services */
 
 function renderNfs() {
-  $("nfs").innerHTML = '<div class="card-head"><b>Exports du serveur</b><span class="sub">/etc/exports, gérés hors du panneau</span></div>' + S.exports.map(l => {
+  $("nfs").innerHTML = '<div class="card-head"><b>' + t("Server exports") + '</b><span class="sub">' + t("/etc/exports, managed outside the panel") + "</span></div>" + S.exports.map(l => {
     const [path, ...clients] = l.trim().split(/\s+/);
     const ips = byTag(clients.map(c => c.replace(/\(.*$/, "")), ip => "host:" + ip);
     return '<div class="export"><b>' + esc(path) + '</b><div class="chips">' + ips.map(ip =>
-      '<button class="chip' + (S.connected.has(ip) ? " ok" : "") + '" data-edit-item="host:' + esc(ip) + '" data-sys="' + esc(ip) + '" title="' + esc(ip) + ' — cliquer pour renommer ou étiqueter">' +
+      '<button class="chip' + (S.connected.has(ip) ? " ok" : "") + '" data-edit-item="host:' + esc(ip) + '" data-sys="' + esc(ip) + '" title="' + esc(t("{ip} — click to rename or tag", { ip })) + '">' +
       dot("host:" + ip) + esc(UI.labels["host:" + ip] || CFG.hosts[ip] || ip) + "</button>").join("") + "</div></div>";
-  }).join("") + '<p class="sub">Vert = client connecté en ce moment (NFSv4, port 2049). Cliquer un client pour le renommer ou l\'étiqueter.</p>';
+  }).join("") + '<p class="sub">' + t("Green = client connected right now (NFSv4, port 2049). Click a client to rename or tag it.") + "</p>";
 }
 
 function renderServices() {
   $("services").innerHTML = byTag(S.services, ([n]) => "svc:" + n).map(([name, state]) => {
     const ok = state === "active";
     return '<div class="svc"><span class="dot ' + (ok ? "ok" : "bad") + '"></span>' + nameBlock("svc:" + name, name, name) +
-      '<span class="sub">' + esc(state) + '</span><button data-act="svc" data-svc="' + esc(name) + '">' + (ok ? "Redémarrer" : "Démarrer") + "</button></div>";
+      '<span class="sub">' + esc(state) + '</span><button data-act="svc" data-svc="' + esc(name) + '">' + (ok ? t("Restart") : t("Start")) + "</button></div>";
   }).join("");
 }
 
@@ -674,51 +677,51 @@ function renderJournal() {
   if (!M) return;
   const u = M.updates, n = u.packages.length, held = u.held || [];
   $("updates").hidden = false;
-  $("updates").innerHTML = '<div class="card-head"><b>Mises à jour du système</b>' + (n ? '<button class="primary" data-act="updates-apply">Mettre à jour</button>' : "") +
+  $("updates").innerHTML = '<div class="card-head"><b>' + t("System updates") + "</b>" + (n ? '<button class="primary" data-act="updates-apply">' + t("Update") + "</button>" : "") +
     '</div><div class="svc"><span class="dot ' + (n || u.reboot ? "warn" : "ok") + '"></span><span>' +
-    (n ? n + " paquet" + (n > 1 ? "s" : "") + " à mettre à jour" : "Système à jour") + (u.reboot ? " · redémarrage nécessaire" : "") + "</span></div>" +
+    (n ? tp(n, "{n} package to update", "{n} packages to update") : t("System up to date")) + (u.reboot ? " · " + t("restart required") : "") + "</span></div>" +
     (n ? '<p class="sub">' + u.packages.map(esc).join(", ") + "</p>" : "") +
-    (held.length ? '<p class="sub">Retenus (apt-mark hold), non mis à jour : ' + held.map(esc).join(", ") + "</p>" : "");
-  el.innerHTML = '<div class="card-head"><b>Journal des actions</b></div>' +
+    (held.length ? '<p class="sub">' + t("Held (apt-mark hold), not updated: {list}", { list: held.map(esc).join(", ") }) + "</p>" : "");
+  el.innerHTML = '<div class="card-head"><b>' + t("Action log") + "</b></div>" +
     (M.journal.length ? '<div class="table-wrap"><table><tbody>' + M.journal.map(l => {
       const [when, ...rest] = l.split(" ");
-      return "<tr><td><small class=\"sys\">" + esc(new Date(when).toLocaleString("fr-FR")) + "</small></td><td>" + esc(rest.join(" ")) + "</td></tr>";
-    }).join("") + "</tbody></table></div>" : '<p class="sub">Aucune action récente.</p>');
+      return "<tr><td><small class=\"sys\">" + esc(new Date(when).toLocaleString(LOCALE())) + "</small></td><td>" + esc(rest.join(" ")) + "</td></tr>";
+    }).join("") + "</tbody></table></div>" : '<p class="sub">' + t("No recent actions.") + "</p>");
 }
 
 async function applyUpdates() {
   const p = M.updates.packages;
-  const fd = await ask("Installer les mises à jour ?", "<p>" + p.length + " paquet" + (p.length > 1 ? "s" : "") + " : " + p.map(esc).join(", ") + "</p>" +
-    '<p class="sub">apt-get upgrade, fichiers de configuration conservés. Les services concernés redémarrent (Samba : connexions en cours coupées). Peut prendre quelques minutes.</p>', "Mettre à jour");
-  if (fd) return mg({ op: "updates_apply" }, "Mises à jour installées");
+  const fd = await ask(t("Install the updates?"), "<p>" + tp(p.length, "{n} package: {list}", "{n} packages: {list}", { list: p.map(esc).join(", ") }) + "</p>" +
+    '<p class="sub">' + t("apt-get upgrade, configuration files kept. The affected services restart (Samba: open connections are dropped). May take a few minutes.") + "</p>", t("Update"));
+  if (fd) return mg({ op: "updates_apply" }, t("Updates installed"));
 }
 
 function renderAlerts() {
   const el = $("alerts"), a = M && M.alerts;
   el.hidden = !M;
   if (!M) return;
-  el.innerHTML = '<div class="card-head"><b>Alertes</b>' + (a ? '<button data-act="alert-test">Envoyer un test</button>' : "") + "</div>" +
-    (!a ? '<p class="sub">Non configurées : renseigner <code>alerts.url</code> dans la configuration du panneau.</p>'
-      : '<p class="sub">Envoyées à ' + esc(a.target) + " : pool dégradé ou en erreur, pool rempli à " + a.capacity_pct + " %, disque en échec SMART ou avec erreurs, service en échec. " +
-        "Un message à l'apparition, un autre au retour à la normale.</p>" +
+  el.innerHTML = '<div class="card-head"><b>' + t("Alerts") + "</b>" + (a ? '<button data-act="alert-test">' + t("Send a test") + "</button>" : "") + "</div>" +
+    (!a ? '<p class="sub">' + t("Not configured: set <code>alerts.url</code> in the panel configuration.") + "</p>"
+      : '<p class="sub">' + t("Sent to {target}: degraded or faulted pool, pool {pct} % full, disk failing SMART or with errors, failed service. One message when it starts, another when it is back to normal.",
+        { target: esc(a.target), pct: a.capacity_pct }) + "</p>" +
         (a.problems.length ? a.problems.map(p => '<div class="svc"><span class="dot bad"></span><span>' + esc(p) + "</span></div>").join("")
-          : '<div class="svc"><span class="dot ok"></span><span>Aucun problème en cours</span></div>'));
+          : '<div class="svc"><span class="dot ok"></span><span>' + t("No current problems") + "</span></div>"));
 }
 
 /* ---------- shares, accounts and pools created from the page (/api/manage) ---------- */
 
 let M = null; // {state, users, groups, mountpoints, admin_exports, free_disks}
 const FEAT = () => CFG.features || {};
-const ACCESS = { ro: "lecture", rw: "lecture + écriture" };
-const SQUASHES = [["root_squash", "root → anonyme"], ["no_root_squash", "root conservé"], ["all_squash", "tous anonymes"]];
-const LAYOUT_LABELS = [["mirror", "Miroir (RAID 1)"], ["raidz1", "RAIDZ1 · 1 disque de parité"], ["raidz2", "RAIDZ2 · 2 disques de parité"],
-  ["raidz3", "RAIDZ3 · 3 disques de parité"], ["stripe", "Agrégat sans redondance"]];
+const ACCESS = { ro: "read only", rw: "read + write" };
+const SQUASHES = [["root_squash", "root → anonymous"], ["no_root_squash", "root kept"], ["all_squash", "all anonymous"]];
+const LAYOUT_LABELS = [["mirror", "Mirror (RAID 1)"], ["raidz1", "RAIDZ1 · 1 parity disk"], ["raidz2", "RAIDZ2 · 2 parity disks"],
+  ["raidz3", "RAIDZ3 · 3 parity disks"], ["stripe", "Stripe without redundancy"]];
 const hostName = h => UI.labels["host:" + h] || CFG.hosts[h] || h;
 
 // One action at a time: a double click would otherwise send it twice.
 let busy = false;
 async function once(run) {
-  if (busy) return toast("Action en cours…");
+  if (busy) return toast(t("Action in progress…"));
   busy = true;
   try { await run(); } finally { busy = false; }
 }
@@ -728,7 +731,7 @@ const mg = (payload, okMsg) => once(async () => {
     banner("");
     toast(okMsg);
     await slowTick();
-  } catch (e) { banner("Refusé : " + e.message); }
+  } catch (e) { banner(t("Refused: {err}", { err: e.message })); }
 });
 
 function renderShares() {
@@ -737,31 +740,31 @@ function renderShares() {
   if (el.hidden || !M) return;
   const rows = ["nfs", "smb"].flatMap(kind => Object.entries(M.state[kind] || {}).map(([name, s]) => [kind, name, s]));
   const host = (S.host || "").toLowerCase();
-  el.innerHTML = '<div class="card-head"><b>Partages du panneau</b>' +
-    (f.nfs ? '<button class="primary" data-act="share-new" data-kind="nfs">Nouveau partage NFS</button>' : "") +
-    (f.smb ? '<button class="primary" data-act="share-new" data-kind="smb">Nouveau partage SMB</button>' : "") +
-    (f.smb && f.users ? '<button data-act="tm-new">Nouvelle destination Time Machine</button>' : "") + "</div>" +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Nom</th><th>Type</th><th>Dossier</th><th>Accès</th><th></th></tr></thead><tbody>' +
-      rows.map(([kind, name, s]) => "<tr><td><b>" + esc(name) + "</b></td><td>" + kind.toUpperCase() + ((kind === "nfs" ? s.open_fw : (s.fw || []).length) ? '<br><small class="sys">pare-feu ouvert</small>' : "") +
-        (s.encrypt === "required" ? '<br><small class="sys">chiffrement obligatoire</small>' : "") +
-        (s.recycle ? '<br><small class="sys">corbeille</small>' : "") + (s.versions ? '<br><small class="sys">versions précédentes</small>' : "") +
+  el.innerHTML = '<div class="card-head"><b>' + t("Panel shares") + "</b>" +
+    (f.nfs ? '<button class="primary" data-act="share-new" data-kind="nfs">' + t("New NFS share") + "</button>" : "") +
+    (f.smb ? '<button class="primary" data-act="share-new" data-kind="smb">' + t("New SMB share") + "</button>" : "") +
+    (f.smb && f.users ? '<button data-act="tm-new">' + t("New Time Machine destination") + "</button>" : "") + "</div>" +
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>' + t("Name") + "</th><th>" + t("Type") + "</th><th>" + t("Folder") + "</th><th>" + t("Access") + "</th><th></th></tr></thead><tbody>" +
+      rows.map(([kind, name, s]) => "<tr><td><b>" + esc(name) + "</b></td><td>" + kind.toUpperCase() + ((kind === "nfs" ? s.open_fw : (s.fw || []).length) ? '<br><small class="sys">' + t("firewall open") + "</small>" : "") +
+        (s.encrypt === "required" ? '<br><small class="sys">' + t("encryption required") + "</small>" : "") +
+        (s.recycle ? '<br><small class="sys">' + t("recycle bin") + "</small>" : "") + (s.versions ? '<br><small class="sys">' + t("previous versions") + "</small>" : "") +
         (s.timemachine ? '<br><small class="sys">Time Machine' + (s.tm_max ? " · " + esc(s.tm_max) : "") + "</small>" : "") + "</td><td>" + esc(s.path) + '</td><td><div class="chips">' +
         (kind === "nfs"
-          ? s.clients.map(c => '<span class="chip' + (S.connected.has(c.host) ? " ok" : "") + '">' + dot("host:" + c.host) + esc(hostName(c.host)) + " · " + (c.rw ? "écriture" : "lecture") + "</span>")
-          : Object.entries(s.access).map(([k, m]) => '<span class="chip">' + (k[0] === "g" ? "groupe " : "") + esc(k.slice(2)) + " · " + (m === "rw" ? "écriture" : "lecture") + "</span>")).join("") +
-        '</div></td><td class="actions"><button data-act="share-edit" data-kind="' + kind + '" data-name="' + esc(name) + '">Modifier</button>' +
-        '<button class="danger" data-act="share-del" data-kind="' + kind + '" data-name="' + esc(name) + '">Supprimer</button></td></tr>').join("") +
+          ? s.clients.map(c => '<span class="chip' + (S.connected.has(c.host) ? " ok" : "") + '">' + dot("host:" + c.host) + esc(hostName(c.host)) + " · " + (c.rw ? t("write") : t("read")) + "</span>")
+          : Object.entries(s.access).map(([k, m]) => '<span class="chip">' + (k[0] === "g" ? t("group {name}", { name: esc(k.slice(2)) }) : esc(k.slice(2))) + " · " + (m === "rw" ? t("write") : t("read")) + "</span>")).join("") +
+        '</div></td><td class="actions"><button data-act="share-edit" data-kind="' + kind + '" data-name="' + esc(name) + '">' + t("Edit") + "</button>" +
+        '<button class="danger" data-act="share-del" data-kind="' + kind + '" data-name="' + esc(name) + '">' + t("Delete") + "</button></td></tr>").join("") +
       "</tbody></table></div>"
-      : '<p class="sub">Aucun partage créé depuis le panneau.</p>') +
-    (f.smb && M.sessions.length ? '<p class="sub"><b>Connexions SMB en cours</b></p>' + M.sessions.map(x => '<div class="svc"><span class="dot ' + (x.encryption ? "ok" : "") + '"></span><b>' +
-      esc(x.user) + '</b><span class="sub">' + esc(hostName(x.machine)) + " · " + esc((x.shares || []).join(", ") || "aucun partage ouvert") + " · " + esc(x.dialect) +
-      (x.encryption ? " · chiffré " + esc(x.encryption) : " · non chiffré") + " · depuis " + new Date(x.since).toLocaleString("fr-FR") + "</span></div>").join("") : "") +
-    (f.smb && M.bonjour && M.bonjour !== "absent" ? '<div class="svc"><span class="dot ' + (M.bonjour === "active" ? "ok" : "") + '"></span><b>Annonce Bonjour</b>' +
-      '<span class="sub">' + (M.bonjour === "active" ? "active : les Mac voient le serveur et ses destinations Time Machine sans saisir d'adresse"
-        : "arrêtée : se connecter par adresse (smb://…)") + '</span><button data-act="bonjour" data-on="' + (M.bonjour === "active" ? "" : "1") + '">' +
-      (M.bonjour === "active" ? "Arrêter" : "Activer") + "</button></div>" : "") +
-    '<p class="sub">' + (f.smb ? "SMB : \\\\" + esc(host) + "\\nom (Windows) ou smb://" + esc(host) + "/nom (macOS), avec un compte de la rubrique Comptes. " : "") +
-    (f.nfs ? "NFS : accès par adresse IP du client, sans compte." : "") + "</p>";
+      : '<p class="sub">' + t("No shares created from the panel.") + "</p>") +
+    (f.smb && M.sessions.length ? '<p class="sub"><b>' + t("Current SMB connections") + "</b></p>" + M.sessions.map(x => '<div class="svc"><span class="dot ' + (x.encryption ? "ok" : "") + '"></span><b>' +
+      esc(x.user) + '</b><span class="sub">' + esc(hostName(x.machine)) + " · " + esc((x.shares || []).join(", ") || t("no share open")) + " · " + esc(x.dialect) +
+      " · " + (x.encryption ? t("encrypted {v}", { v: esc(x.encryption) }) : t("not encrypted")) + " · " + t("since {when}", { when: new Date(x.since).toLocaleString(LOCALE()) }) + "</span></div>").join("") : "") +
+    (f.smb && M.bonjour && M.bonjour !== "absent" ? '<div class="svc"><span class="dot ' + (M.bonjour === "active" ? "ok" : "") + '"></span><b>' + t("Bonjour announcement") + "</b>" +
+      '<span class="sub">' + (M.bonjour === "active" ? t("on: Macs see the server and its Time Machine destinations without typing an address")
+        : t("off: connect by address (smb://…)")) + '</span><button data-act="bonjour" data-on="' + (M.bonjour === "active" ? "" : "1") + '">' +
+      (M.bonjour === "active" ? t("Stop") : t("Turn on")) + "</button></div>" : "") +
+    '<p class="sub">' + (f.smb ? t("SMB: \\\\{host}\\name (Windows) or smb://{host}/name (macOS), with an account from the Accounts section.", { host: esc(host) }) + " " : "") +
+    (f.nfs ? t("NFS: access by client IP address, no account.") : "") + "</p>";
 }
 
 async function shareForm(kind, name) {
@@ -769,148 +772,147 @@ async function shareForm(kind, name) {
   // An NFS path can be exported once: not by /etc/exports, not by another panel share.
   const taken = new Set(M.admin_exports.concat(Object.entries(M.state.nfs || {}).filter(([n]) => n !== name).map(([, s]) => s.path)));
   const paths = M.mountpoints.filter(p => kind === "smb" || !taken.has(p));
-  let body = "<label>Nom" + (name ? '<input name="name" value="' + esc(name) + '" readonly>'
-    : '<input name="name" required maxlength="32" pattern="[A-Za-z0-9_\\-]+" placeholder="ex. Photos">') + "</label>" +
-    '<label>Dossier (dataset ZFS)<select name="path" required>' + paths.map(p => "<option" + (cur && cur.path === p ? " selected" : "") + ">" + esc(p) + "</option>").join("") + "</select></label>";
+  let body = "<label>" + t("Name") + (name ? '<input name="name" value="' + esc(name) + '" readonly>'
+    : '<input name="name" required maxlength="32" pattern="[A-Za-z0-9_\\-]+" placeholder="' + t("e.g. Photos") + '">') + "</label>" +
+    "<label>" + t("Folder (ZFS dataset)") + '<select name="path" required>' + paths.map(p => "<option" + (cur && cur.path === p ? " selected" : "") + ">" + esc(p) + "</option>").join("") + "</select></label>";
   if (kind === "nfs") {
     const rows = (cur ? cur.clients : []).concat(Array(Math.max(2, 5 - (cur ? cur.clients.length : 0))).fill({ host: "", rw: false, squash: "root_squash" }));
-    body += '<fieldset class="rows"><legend>Clients · adresse IP, réseau (192.168.1.0/24) ou nom ; lignes vides ignorées</legend>' + rows.map((c, i) =>
-      '<div class="client"><input name="host' + i + '" list="hosts-dl" value="' + esc(c.host) + '" aria-label="Client ' + (i + 1) + '">' +
-      '<select name="rw' + i + '" aria-label="Droits"><option value="">lecture</option><option value="1"' + (c.rw ? " selected" : "") + ">lecture + écriture</option></select>" +
-      '<select name="sq' + i + '" aria-label="Utilisateur root">' + SQUASHES.map(([v, l]) => '<option value="' + v + '"' + (c.squash === v ? " selected" : "") + ">" + l + "</option>").join("") +
+    body += '<fieldset class="rows"><legend>' + t("Clients · IP address, network (192.168.1.0/24) or name; empty lines are ignored") + "</legend>" + rows.map((c, i) =>
+      '<div class="client"><input name="host' + i + '" list="hosts-dl" value="' + esc(c.host) + '" aria-label="' + t("Client {n}", { n: i + 1 }) + '">' +
+      '<select name="rw' + i + '" aria-label="' + t("Rights") + '"><option value="">' + t(ACCESS.ro) + '</option><option value="1"' + (c.rw ? " selected" : "") + ">" + t(ACCESS.rw) + "</option></select>" +
+      '<select name="sq' + i + '" aria-label="' + t("root user") + '">' + SQUASHES.map(([v, l]) => '<option value="' + v + '"' + (c.squash === v ? " selected" : "") + ">" + t(l) + "</option>").join("") +
       "</select></div>").join("") + "</fieldset>" +
       (FEAT().firewall ? '<label class="check"><input type="checkbox" name="fw"' + (cur && cur.open_fw ? " checked" : "") +
-        '> Ouvrir le pare-feu (NFS, port 2049) pour ces clients</label><p class="sub">Fermé par défaut : à cocher si le client n\'a pas déjà accès. ' +
-        "Adresses IP ou réseaux seulement. Supprimer le partage referme l'accès.</p>" : "") +
+        "> " + t("Open the firewall (NFS, port 2049) for these clients") + '</label><p class="sub">' +
+        t("Closed by default: tick it if the client does not already have access. IP addresses or networks only. Deleting the share closes the access again.") + "</p>" : "") +
       '<datalist id="hosts-dl">' + Object.entries(CFG.hosts || {}).map(([ip, n]) => '<option value="' + esc(ip) + '">' + esc(n) + "</option>").join("") + "</datalist>";
-    const fd = await ask(name ? "Partage NFS " + name : "Nouveau partage NFS", body, "Enregistrer");
+    const fd = await ask(name ? t("NFS share {name}", { name }) : t("New NFS share"), body, t("Save"));
     if (!fd) return;
     const clients = rows.map((_, i) => ({ host: fd.get("host" + i).trim(), rw: fd.get("rw" + i) === "1", squash: fd.get("sq" + i) })).filter(c => c.host);
-    return mg({ op: "share_save", kind, name: fd.get("name"), path: fd.get("path"), clients, open_fw: fd.get("fw") === "on" }, "Partage NFS " + fd.get("name") + " enregistré");
+    return mg({ op: "share_save", kind, name: fd.get("name"), path: fd.get("path"), clients, open_fw: fd.get("fw") === "on" }, t("NFS share {name} saved", { name: fd.get("name") }));
   }
   // Without a Samba password an account cannot log in: shown, not selectable.
-  const who = M.users.map(u => ["u:" + u.name, u.name, !u.samba]).concat(M.groups.filter(g => g.owned).map(g => ["g:" + g.name, "groupe " + g.name, false]));
-  body += '<fieldset class="rows"><legend>Accès</legend>' + (who.length ? who.map(([k, l, off]) =>
-    '<div class="client"><span>' + esc(l) + (off ? ' <small class="sys">pas de mot de passe Samba</small>' : "") + '</span><select name="' + esc(k) + '"' +
-    (off ? " disabled" : "") + ' aria-label="Accès de ' + esc(l) + '"><option value="">aucun</option>' +
-    Object.entries(ACCESS).map(([v, t]) => '<option value="' + v + '"' + (cur && cur.access[k] === v ? " selected" : "") + ">" + t + "</option>").join("") + "</select></div>").join("")
-    : '<p class="sub">Aucun compte : créez-en un dans la rubrique Comptes.</p>') + "</fieldset>" +
-    (FEAT().firewall ? '<label>Ouvrir le pare-feu (SMB, port 445) pour<input name="fw" value="' + esc((cur && cur.fw || []).join(", ")) +
-      '" placeholder="vide = fermé ; ex. 192.168.1.20, 192.168.1.0/24"></label>' : "") +
-    '<label>Chiffrement<select name="encrypt"><option value="desired">si le client sait chiffrer (macOS, Windows 10 et +)</option>' +
-    '<option value="required"' + (cur && cur.encrypt === "required" ? " selected" : "") + ">obligatoire : refuse les clients qui ne chiffrent pas</option></select></label>" +
+  const who = M.users.map(u => ["u:" + u.name, u.name, !u.samba]).concat(M.groups.filter(g => g.owned).map(g => ["g:" + g.name, t("group {name}", { name: g.name }), false]));
+  body += '<fieldset class="rows"><legend>' + t("Access") + "</legend>" + (who.length ? who.map(([k, l, off]) =>
+    '<div class="client"><span>' + esc(l) + (off ? ' <small class="sys">' + t("no Samba password") + "</small>" : "") + '</span><select name="' + esc(k) + '"' +
+    (off ? " disabled" : "") + ' aria-label="' + t("Access for {name}", { name: esc(l) }) + '"><option value="">' + t("no access") + "</option>" +
+    Object.entries(ACCESS).map(([v, a]) => '<option value="' + v + '"' + (cur && cur.access[k] === v ? " selected" : "") + ">" + t(a) + "</option>").join("") + "</select></div>").join("")
+    : '<p class="sub">' + t("No accounts: create one in the Accounts section.") + "</p>") + "</fieldset>" +
+    (FEAT().firewall ? "<label>" + t("Open the firewall (SMB, port 445) for") + '<input name="fw" value="' + esc((cur && cur.fw || []).join(", ")) +
+      '" placeholder="' + t("empty = closed; e.g. 192.168.1.20, 192.168.1.0/24") + '"></label>' : "") +
+    "<label>" + t("Encryption") + '<select name="encrypt"><option value="desired">' + t("if the client can encrypt (macOS, Windows 10 and later)") + "</option>" +
+    '<option value="required"' + (cur && cur.encrypt === "required" ? " selected" : "") + ">" + t("required: refuse clients that do not encrypt") + "</option></select></label>" +
     '<label class="check"><input type="checkbox" name="versions"' + (cur ? (cur.versions ? " checked" : "") : " checked") +
-    "> Versions précédentes (Windows) à partir des snapshots automatiques du dataset</label>" +
+    "> " + t("Previous versions (Windows) from the dataset's automatic snapshots") + "</label>" +
     '<label class="check"><input type="checkbox" name="recycle"' + (cur ? (cur.recycle ? " checked" : "") : " checked") +
-    "> Corbeille : les fichiers supprimés vont dans .recycle et sont effacés après " + (CFG.recycle_days || 30) + " jours</label>" +
-    '<label class="check"><input type="checkbox" name="tm"' + (cur && cur.timemachine ? " checked" : "") + "> Destination Time Machine (sauvegardes de Mac)</label>" +
-    '<label>Taille maximale Time Machine<input name="tm_max" pattern="[0-9]+(\\.[0-9]+)?[KMGT]?" value="' + esc(cur && cur.tm_max || "") +
-    '" placeholder="vide = sans limite ; ex. 1T"></label>' +
-    '<label>Propriétaire des fichiers<select name="owner"><option value="">propriétaire actuel du dossier</option>' +
+    "> " + t("Recycle bin: deleted files go to .recycle and are erased after {n} days", { n: CFG.recycle_days || 30 }) + "</label>" +
+    '<label class="check"><input type="checkbox" name="tm"' + (cur && cur.timemachine ? " checked" : "") + "> " + t("Time Machine destination (Mac backups)") + "</label>" +
+    "<label>" + t("Time Machine maximum size") + '<input name="tm_max" pattern="[0-9]+(\\.[0-9]+)?[KMGT]?" value="' + esc(cur && cur.tm_max || "") +
+    '" placeholder="' + t("empty = no limit; e.g. 1T") + '"></label>' +
+    "<label>" + t("File owner") + '<select name="owner"><option value="">' + t("current owner of the folder") + "</option>" +
     M.users.filter(u => u.samba).map(u => "<option" + (cur && cur.owner === u.name ? " selected" : "") + ">" + esc(u.name) + "</option>").join("") + "</select></label>" +
-    '<p class="sub">Samba écrit les nouveaux fichiers sous ce compte. Choisir un compte en fait le propriétaire du dossier partagé lui-même, pas de son contenu. ' +
-    "Obligatoire si le dossier appartient à root (jamais d'écriture en root). Seuls les comptes choisis dans Accès se connectent.</p>";
-  const fd = await ask(name ? "Partage SMB " + name : "Nouveau partage SMB", body, "Enregistrer");
+    '<p class="sub">' + t("Samba writes new files as this account. Choosing an account makes it the owner of the shared folder itself, not of its contents. Required if the folder belongs to root (never any writing as root). Only the accounts chosen under Access can connect.") + "</p>";
+  const fd = await ask(name ? t("SMB share {name}", { name }) : t("New SMB share"), body, t("Save"));
   if (!fd) return;
   const access = Object.fromEntries(who.map(([k]) => [k, fd.get(k)]).filter(([, v]) => v));
   const fw = (fd.get("fw") || "").split(/[\s,;]+/).filter(Boolean);
-  return mg({ op: "share_save", kind, name: fd.get("name"), path: fd.get("path"), access, fw, owner: fd.get("owner"), encrypt: fd.get("encrypt"), timemachine: fd.get("tm") === "on", tm_max: fd.get("tm_max").trim(), versions: fd.get("versions") === "on", recycle: fd.get("recycle") === "on" }, "Partage SMB " + fd.get("name") + " enregistré");
+  return mg({ op: "share_save", kind, name: fd.get("name"), path: fd.get("path"), access, fw, owner: fd.get("owner"), encrypt: fd.get("encrypt"), timemachine: fd.get("tm") === "on", tm_max: fd.get("tm_max").trim(), versions: fd.get("versions") === "on", recycle: fd.get("recycle") === "on" }, t("SMB share {name} saved", { name: fd.get("name") }));
 }
 
 // One form: dataset (reused, or created if pools are on) + account + encrypted Time Machine share.
 async function tmForm() {
   const pools = FEAT().pools;
-  const fd = await ask("Nouvelle destination Time Machine",
-    '<label>Nom du Mac (compte et partage)<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="ex. macbook-pro" autocomplete="off"></label>' +
-    '<label>Dataset<input name="ds" required list="tm-ds" placeholder="ex. tank/timemachine/macbook-pro"></label>' +
+  const fd = await ask(t("New Time Machine destination"),
+    "<label>" + t("Mac name (account and share)") + '<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="' + t("e.g. macbook-pro") + '" autocomplete="off"></label>' +
+    "<label>" + t("Dataset") + '<input name="ds" required list="tm-ds" placeholder="' + t("e.g. tank/timemachine/macbook-pro") + '"></label>' +
     '<datalist id="tm-ds">' + S.datasets.map(r => '<option value="' + esc(r[0]) + '">').join("") + "</datalist>" +
-    '<p class="sub">' + (pools ? "Existant : réutilisé. Nouveau : créé avec ce quota, blocs de 1M, sans snapshots automatiques."
-      : "Dataset existant uniquement (créé par l'administrateur, idéalement avec quota).") + "</p>" +
-    '<label>Taille réservée<input name="size" required pattern="[0-9]+(\\.[0-9]+)?[KMGT]" value="2T"></label>' +
-    (FEAT().firewall ? '<label>Ouvrir le pare-feu SMB pour (IP du Mac, ou le réseau s\'il est en DHCP)<input name="ip" placeholder="vide = fermé ; ex. 192.168.1.107 ou 192.168.1.0/24"></label>' : "") +
-    PASSWORDS + '<p class="sub">Chiffrement obligatoire. Sur le Mac : Réglages > Time Machine > Ajouter une destination, compte = nom du Mac.</p>', "Créer");
+    '<p class="sub">' + (pools ? t("Existing: reused. New: created with this quota, 1M blocks, no automatic snapshots.")
+      : t("Existing dataset only (created by the administrator, ideally with a quota).")) + "</p>" +
+    "<label>" + t("Reserved size") + '<input name="size" required pattern="[0-9]+(\\.[0-9]+)?[KMGT]" value="2T"></label>' +
+    (FEAT().firewall ? "<label>" + t("Open the SMB firewall for (the Mac's IP, or the network if it uses DHCP)") + '<input name="ip" placeholder="' + t("empty = closed; e.g. 192.168.1.107 or 192.168.1.0/24") + '"></label>' : "") +
+    passwords() + '<p class="sub">' + t("Encryption required. On the Mac: Settings > Time Machine > Add Destination, account = Mac name.") + "</p>", t("Create"));
   if (fd && samePasswords(fd)) mg({ op: "timemachine_create", name: fd.get("name"), dataset: fd.get("ds").trim(), size: fd.get("size"), ip: (fd.get("ip") || "").trim(), password: fd.get("p1") },
-    "Destination Time Machine " + fd.get("name") + " créée");
+    t("Time Machine destination {name} created", { name: fd.get("name") }));
 }
 
 async function deleteShare(kind, name) {
-  const fd = await ask("Supprimer le partage ?", "<p>Le partage <b>" + esc(name) + "</b> ne sera plus accessible. Les fichiers restent dans le dataset.</p>", "Supprimer", true);
-  if (fd) mg({ op: "share_delete", kind, name }, "Partage " + name + " supprimé");
+  const fd = await ask(t("Delete the share?"), "<p>" + t("The share <b>{name}</b> will no longer be accessible. The files stay in the dataset.", { name: esc(name) }) + "</p>", t("Delete"), true);
+  if (fd) mg({ op: "share_delete", kind, name }, t("Share {name} deleted", { name }));
 }
 
 function renderAccounts() {
   const el = $("accounts");
-  if (!FEAT().users) { el.innerHTML = '<article class="card"><p class="sub">Gestion des comptes désactivée sur ce serveur.</p></article>'; return; }
+  if (!FEAT().users) { el.innerHTML = '<article class="card"><p class="sub">' + t("Account management is disabled on this server.") + "</p></article>"; return; }
   if (!M) return;
   const owned = M.groups.filter(g => g.owned);
   const btn = (act, name, label, cls) => '<button' + (cls ? ' class="' + cls + '"' : "") + ' data-act="' + act + '" data-name="' + esc(name) + '">' + label + "</button>";
-  el.innerHTML = '<article class="card"><div class="card-head"><b>Utilisateurs</b><button class="primary" data-act="user-new">Nouvel utilisateur</button></div>' +
-    '<div class="table-wrap"><table><thead><tr><th>Identifiant</th><th>Groupes</th><th>Origine</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<article class="card"><div class="card-head"><b>' + t("Users") + '</b><button class="primary" data-act="user-new">' + t("New user") + "</button></div>" +
+    '<div class="table-wrap"><table><thead><tr><th>' + t("Username") + "</th><th>" + t("Groups") + "</th><th>" + t("Source") + "</th><th></th></tr></thead><tbody>" +
     M.users.map(u => "<tr><td><b>" + esc(u.name) + '</b> <small class="sys">uid ' + u.uid + "</small></td><td>" + (u.groups.map(esc).join(", ") || "—") +
-      "</td><td>" + (u.owned ? "panneau" : '<span class="sub">système, lecture seule</span>') + '</td><td class="actions">' +
-      (u.owned ? btn("user-groups", u.name, "Groupes") + btn("user-pass", u.name, "Mot de passe") + btn("user-del", u.name, "Supprimer", "danger") : "") + "</td></tr>").join("") +
-    '</tbody></table></div><p class="sub">Comptes Linux sans connexion au serveur (ni shell ni SSH), avec un mot de passe Samba pour les partages SMB.</p></article>' +
-    '<article class="card"><div class="card-head"><b>Groupes</b><button class="primary" data-act="group-new">Nouveau groupe</button></div>' +
-    (owned.length ? owned.map(g => '<div class="svc"><b>' + esc(g.name) + '</b><span class="sub">' + (g.members.map(esc).join(", ") || "aucun membre") + "</span>" +
-      btn("group-del", g.name, "Supprimer", "danger") + "</div>").join("")
-      : '<p class="sub">Aucun groupe. Un groupe donne le même accès à plusieurs comptes (ex. famille).</p>') + "</article>";
+      "</td><td>" + (u.owned ? t("panel") : '<span class="sub">' + t("system, read-only") + "</span>") + '</td><td class="actions">' +
+      (u.owned ? btn("user-groups", u.name, t("Groups")) + btn("user-pass", u.name, t("Password")) + btn("user-del", u.name, t("Delete"), "danger") : "") + "</td></tr>").join("") +
+    '</tbody></table></div><p class="sub">' + t("Linux accounts that cannot log in to the server (no shell, no SSH), with a Samba password for SMB shares.") + "</p></article>" +
+    '<article class="card"><div class="card-head"><b>' + t("Groups") + '</b><button class="primary" data-act="group-new">' + t("New group") + "</button></div>" +
+    (owned.length ? owned.map(g => '<div class="svc"><b>' + esc(g.name) + '</b><span class="sub">' + (g.members.map(esc).join(", ") || t("no members")) + "</span>" +
+      btn("group-del", g.name, t("Delete"), "danger") + "</div>").join("")
+      : '<p class="sub">' + t("No groups. A group gives several accounts the same access (e.g. family).") + "</p>") + "</article>";
 }
 
 function groupBoxes(checked) {
   const owned = M.groups.filter(g => g.owned);
-  return '<fieldset class="swatches"><legend>Groupes</legend>' + (owned.length ? owned.map(g => '<label class="swatch"><input type="checkbox" name="g" value="' + esc(g.name) + '"' +
-    (checked.includes(g.name) ? " checked" : "") + ">" + esc(g.name) + "</label>").join("") : '<span class="sub">Aucun groupe créé.</span>') + "</fieldset>";
+  return '<fieldset class="swatches"><legend>' + t("Groups") + "</legend>" + (owned.length ? owned.map(g => '<label class="swatch"><input type="checkbox" name="g" value="' + esc(g.name) + '"' +
+    (checked.includes(g.name) ? " checked" : "") + ">" + esc(g.name) + "</label>").join("") : '<span class="sub">' + t("No groups created.") + "</span>") + "</fieldset>";
 }
-const PASSWORDS = '<label>Mot de passe (8 caractères au moins)<input type="password" name="p1" minlength="8" maxlength="128" required autocomplete="new-password"></label>' +
-  '<label>Confirmation<input type="password" name="p2" minlength="8" maxlength="128" required autocomplete="new-password"></label>';
+const passwords = () => "<label>" + t("Password (at least 8 characters)") + '<input type="password" name="p1" minlength="8" maxlength="128" required autocomplete="new-password"></label>' +
+  "<label>" + t("Confirmation") + '<input type="password" name="p2" minlength="8" maxlength="128" required autocomplete="new-password"></label>';
 function samePasswords(fd) {
   if (fd.get("p1") === fd.get("p2")) return true;
-  banner("Les deux mots de passe sont différents.");
+  banner(t("The two passwords do not match."));
   return false;
 }
 
 async function userForm() {
-  const fd = await ask("Nouvel utilisateur", '<label>Identifiant<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="ex. alice" autocomplete="off"></label>' +
-    PASSWORDS + groupBoxes([]), "Créer");
-  if (fd && samePasswords(fd)) mg({ op: "user_create", name: fd.get("name"), password: fd.get("p1"), groups: fd.getAll("g") }, "Compte " + fd.get("name") + " créé");
+  const fd = await ask(t("New user"), "<label>" + t("Username") + '<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="' + t("e.g. alice") + '" autocomplete="off"></label>' +
+    passwords() + groupBoxes([]), t("Create"));
+  if (fd && samePasswords(fd)) mg({ op: "user_create", name: fd.get("name"), password: fd.get("p1"), groups: fd.getAll("g") }, t("Account {name} created", { name: fd.get("name") }));
 }
 async function passwordForm(name) {
-  const fd = await ask("Mot de passe de " + name, PASSWORDS, "Changer");
-  if (fd && samePasswords(fd)) mg({ op: "user_password", name, password: fd.get("p1") }, "Mot de passe de " + name + " changé");
+  const fd = await ask(t("Password for {name}", { name }), passwords(), t("Change"));
+  if (fd && samePasswords(fd)) mg({ op: "user_password", name, password: fd.get("p1") }, t("Password for {name} changed", { name }));
 }
 async function userGroupsForm(name) {
-  const fd = await ask("Groupes de " + name, groupBoxes(M.users.find(u => u.name === name).groups), "Enregistrer");
-  if (fd) mg({ op: "user_groups", name, groups: fd.getAll("g") }, "Groupes de " + name + " enregistrés");
+  const fd = await ask(t("Groups for {name}", { name }), groupBoxes(M.users.find(u => u.name === name).groups), t("Save"));
+  if (fd) mg({ op: "user_groups", name, groups: fd.getAll("g") }, t("Groups for {name} saved", { name }));
 }
 async function deleteAccount(op, name) {
-  const fd = await ask("Supprimer " + name + " ?", "<p><b>" + esc(name) + "</b> sera supprimé. Ses fichiers restent sur les partages.</p>", "Supprimer", true);
-  if (fd) mg({ op, name }, name + " supprimé");
+  const fd = await ask(t("Delete {name}?", { name }), "<p>" + t("<b>{name}</b> will be deleted. Their files stay on the shares.", { name: esc(name) }) + "</p>", t("Delete"), true);
+  if (fd) mg({ op, name }, t("{name} deleted", { name }));
 }
 async function groupForm() {
-  const fd = await ask("Nouveau groupe", '<label>Nom<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="ex. famille"></label>', "Créer");
-  if (fd) mg({ op: "group_create", name: fd.get("name") }, "Groupe " + fd.get("name") + " créé");
+  const fd = await ask(t("New group"), "<label>" + t("Name") + '<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="' + t("e.g. family") + '"></label>', t("Create"));
+  if (fd) mg({ op: "group_create", name: fd.get("name") }, t("Group {name} created", { name: fd.get("name") }));
 }
 
 async function datasetForm() {
-  const fd = await ask("Nouveau dataset", '<label>Dans<select name="parent">' + S.datasets.map(r => "<option>" + esc(r[0]) + "</option>").join("") + "</select></label>" +
-    '<label>Nom<input name="leaf" required pattern="[A-Za-z0-9_.:\\-]+" placeholder="ex. photos"></label>' +
-    '<label>Compression<select name="comp">' + COMPRESSION.map(c => "<option>" + c + "</option>").join("") + "</select></label>", "Créer");
-  if (fd) mg({ op: "dataset_create", dataset: fd.get("parent") + "/" + fd.get("leaf"), compression: fd.get("comp") }, "Dataset " + fd.get("parent") + "/" + fd.get("leaf") + " créé");
+  const fd = await ask(t("New dataset"), "<label>" + t("In") + '<select name="parent">' + S.datasets.map(r => "<option>" + esc(r[0]) + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Name") + '<input name="leaf" required pattern="[A-Za-z0-9_.:\\-]+" placeholder="' + t("e.g. photos") + '"></label>' +
+    "<label>" + t("Compression") + '<select name="comp">' + COMPRESSION.map(c => "<option>" + c + "</option>").join("") + "</select></label>", t("Create"));
+  if (fd) mg({ op: "dataset_create", dataset: fd.get("parent") + "/" + fd.get("leaf"), compression: fd.get("comp") }, t("Dataset {name} created", { name: fd.get("parent") + "/" + fd.get("leaf") }));
 }
 async function poolForm() {
   const disks = M.free_disks;
   if (!disks.length) {
-    await ask("Nouveau pool", "<p>Aucun disque libre : tous les disques ont déjà des partitions, des données ou appartiennent à un pool.</p>", "Fermer");
+    await ask(t("New pool"), "<p>" + t("No free disk: every disk already has partitions or data, or belongs to a pool.") + "</p>", t("Close"));
     return;
   }
-  const fd = await ask("Nouveau pool",
-    '<p class="sub">Seuls les disques vierges sont proposés. <b>Les disques choisis seront entièrement effacés.</b></p>' +
-    '<label>Nom<input name="name" required pattern="[A-Za-z][A-Za-z0-9_.:\\-]*" placeholder="ex. data"></label>' +
-    '<label>Disposition<select name="layout">' + LAYOUT_LABELS.map(([v, l]) => '<option value="' + v + '">' + l + "</option>").join("") + "</select></label>" +
-    '<fieldset class="swatches"><legend>Disques</legend>' + disks.map(d => '<label class="swatch"><input type="checkbox" name="d" value="' + esc(d.id) + '">' +
+  const fd = await ask(t("New pool"),
+    '<p class="sub">' + t("Only blank disks are offered. <b>The chosen disks will be completely erased.</b>") + "</p>" +
+    "<label>" + t("Name") + '<input name="name" required pattern="[A-Za-z][A-Za-z0-9_.:\\-]*" placeholder="' + t("e.g. data") + '"></label>' +
+    "<label>" + t("Layout") + '<select name="layout">' + LAYOUT_LABELS.map(([v, l]) => '<option value="' + v + '">' + t(l) + "</option>").join("") + "</select></label>" +
+    '<fieldset class="swatches"><legend>' + t("Disks") + "</legend>" + disks.map(d => '<label class="swatch"><input type="checkbox" name="d" value="' + esc(d.id) + '">' +
       esc(d.dev) + " · " + bytes(d.size) + " · " + esc(d.model) + "</label>").join("") + "</fieldset>" +
-    '<label>Confirmation : retapez le nom du pool<input name="confirm" required autocomplete="off"></label>', "Créer le pool", true);
-  if (fd) mg({ op: "pool_create", name: fd.get("name"), layout: fd.get("layout"), disks: fd.getAll("d"), confirm: fd.get("confirm") }, "Pool " + fd.get("name") + " créé");
+    "<label>" + t("Confirmation: retype the pool name") + '<input name="confirm" required autocomplete="off"></label>', t("Create the pool"), true);
+  if (fd) mg({ op: "pool_create", name: fd.get("name"), layout: fd.get("layout"), disks: fd.getAll("d"), confirm: fd.get("confirm") }, t("Pool {name} created", { name: fd.get("name") }));
 }
 
 /* ---------- actions (validated again server-side) ---------- */
@@ -921,59 +923,72 @@ const act = (payload, okMsg) => once(async () => {
     banner("");
     toast(okMsg);
     await slowTick();
-  } catch (e) { banner("Échec : " + e.message); }
+  } catch (e) { banner(t("Failed: {err}", { err: e.message })); }
 });
 
 async function editDataset(name, comp, quota, auto) {
-  const fd = await ask("Modifier " + name,
-    '<label>Compression<select name="comp">' + COMPRESSION.map(c => "<option" + (c === comp ? " selected" : "") + ">" + c + "</option>").join("") + "</select></label>" +
-    '<label>Quota (ex. 500G, 1T, none)<input name="quota" required pattern="none|[0-9]+(\\.[0-9]+)?[KMGTP]?" value="' + esc(quota) + '"></label>' +
-    (FEAT().autosnap ? '<label>Snapshots automatiques<select name="auto"><option value="true">oui (rotation : quart d\'heure, heure, jour, semaine, mois)</option>' +
-      '<option value="false"' + (auto === "false" ? " selected" : "") + ">non</option></select></label>" : "") +
-    '<p class="sub">La compression ne s\'applique qu\'aux données écrites ensuite. Les datasets enfants héritent du choix des snapshots automatiques.</p>');
-  if (fd) act({ action: "dataset_set", dataset: name, compression: fd.get("comp"), quota: fd.get("quota"), autosnap: fd.get("auto") || "" }, name + " modifié");
+  const fd = await ask(t("Edit {name}", { name }),
+    "<label>" + t("Compression") + '<select name="comp">' + COMPRESSION.map(c => "<option" + (c === comp ? " selected" : "") + ">" + c + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Quota (e.g. 500G, 1T, none)") + '<input name="quota" required pattern="none|[0-9]+(\\.[0-9]+)?[KMGTP]?" value="' + esc(quota) + '"></label>' +
+    (FEAT().autosnap ? "<label>" + t("Automatic snapshots") + '<select name="auto"><option value="true">' + t("yes (rotation: quarter-hour, hour, day, week, month)") + "</option>" +
+      '<option value="false"' + (auto === "false" ? " selected" : "") + ">" + t("no") + "</option></select></label>" : "") +
+    '<p class="sub">' + t("Compression only applies to data written afterwards. Child datasets inherit the automatic snapshot choice.") + "</p>");
+  if (fd) act({ action: "dataset_set", dataset: name, compression: fd.get("comp"), quota: fd.get("quota"), autosnap: fd.get("auto") || "" }, t("{name} updated", { name }));
 }
 
 async function createSnap(ds) {
   const d = new Date(), p = n => String(n).padStart(2, "0");
   const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes());
-  const fd = await ask("Snapshot de " + ds,
-    '<label>Nom<input name="snap" required pattern="[A-Za-z0-9_.:\\-]+" value="manuel-' + stamp + '"></label>' +
-    '<label class="check"><input type="checkbox" name="r"> Inclure les datasets enfants (-r)</label>', "Créer");
-  if (fd) act({ action: "snapshot_create", dataset: ds, name: fd.get("snap"), recursive: !!fd.get("r") }, "Snapshot " + ds + "@" + fd.get("snap") + " créé");
+  const fd = await ask(t("Snapshot of {name}", { name: ds }),
+    "<label>" + t("Name") + '<input name="snap" required pattern="[A-Za-z0-9_.:\\-]+" value="' + t("manual") + "-" + stamp + '"></label>' +
+    '<label class="check"><input type="checkbox" name="r"> ' + t("Include child datasets (-r)") + "</label>", t("Create"));
+  if (fd) act({ action: "snapshot_create", dataset: ds, name: fd.get("snap"), recursive: !!fd.get("r") }, t("Snapshot {name} created", { name: ds + "@" + fd.get("snap") }));
 }
 
 async function destroySnap(name) {
-  const fd = await ask("Supprimer le snapshot ?", "<p><b>" + esc(name) + "</b> sera supprimé définitivement.</p>", "Supprimer", true);
-  if (fd) act({ action: "snapshot_destroy", snapshot: name }, name + " supprimé");
+  const fd = await ask(t("Delete the snapshot?"), "<p>" + t("<b>{name}</b> will be permanently deleted.", { name: esc(name) }) + "</p>", t("Delete"), true);
+  if (fd) act({ action: "snapshot_destroy", snapshot: name }, t("{name} deleted", { name }));
 }
 // Every manual snapshot called @snap: one confirmation, then one validated action each.
 async function destroySnaps(snap) {
   const names = S.snapshots.map(s => s[0]).filter(n => n.split("@")[1] === snap);
-  const fd = await ask("Supprimer les " + names.length + " snapshots @" + snap + " ?", '<p>Seront supprimés définitivement :</p><p class="sub">' +
-    names.map(esc).join("<br>") + "</p>", "Supprimer les " + names.length, true);
+  const fd = await ask(t("Delete the {n} snapshots @{snap}?", { n: names.length, snap }), "<p>" + t("Will be permanently deleted:") + '</p><p class="sub">' +
+    names.map(esc).join("<br>") + "</p>", t("Delete all {n}", { n: names.length }), true);
   if (!fd) return;
   let done = 0;
   await once(async () => {
     try {
       for (const name of names) { await post("/api/action", { action: "snapshot_destroy", snapshot: name }); done++; }
       banner("");
-      toast(done + " snapshots supprimés");
-    } catch (e) { banner("Échec après " + done + " / " + names.length + " snapshots supprimés : " + e.message); }
+      toast(t("{n} snapshots deleted", { n: done }));
+    } catch (e) { banner(t("Failed after {done} / {total} snapshots deleted: {err}", { done, total: names.length, err: e.message })); }
     await slowTick();
   });
 }
 
 // One delegated listener: buttons are re-rendered every tick.
 // Theme: "" = follow the system, else forced; per browser (localStorage may be unavailable).
-const THEMES = { "": "auto", light: "clair", dark: "sombre" };
-function setTheme(t) {
-  if (!(t in THEMES)) t = "";
-  if (t)document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
-  $("theme").textContent = "Thème : " + THEMES[t];
-  try { localStorage.setItem("theme", t); } catch { /* not remembered */ }
+const THEMES = { "": "auto", light: "light", dark: "dark" };
+function setTheme(th) {
+  if (!(th in THEMES)) th = "";
+  if (th) document.documentElement.dataset.theme = th; else delete document.documentElement.dataset.theme;
+  $("theme").textContent = t("Theme: {name}", { name: t(THEMES[th]) });
+  try { localStorage.setItem("theme", th); } catch { /* not remembered */ }
 }
 try { setTheme(localStorage.getItem("theme") || ""); } catch { setTheme(""); }
+
+// Language: the viewer's choice (button, localStorage "cairn-lang"), else the server default, else the browser (pickLang).
+// Text is translated when built: re-apply the static text, rebuild what is built once, re-render the rest.
+function setLang(l) {
+  LANG = LANGS[l] ? l : "en";
+  applyStatic();
+  $("lang").textContent = t("Language: {name}", { name: LANGS[LANG].name });
+  setTheme(document.documentElement.dataset.theme || ""); // relabel
+  buildGauges();
+  buildSystem();
+  if (VIEW) $("view-title").textContent = t(VIEWS[VIEW]);
+  render(true);
+}
 
 document.addEventListener("click", e => {
   const b = e.target.closest("button, a");
@@ -984,14 +999,19 @@ document.addEventListener("click", e => {
   if (d.editItem) return editItem(d.editItem, d.sys);
   switch (d.act) {
     case "tags": return manageTags();
-    case "scrub": return act({ action: d.running === "true" ? "scrub_stop" : "scrub_start", pool: d.pool }, (d.running === "true" ? "Scrub arrêté sur " : "Scrub lancé sur ") + d.pool);
-    case "svc": return act({ action: "service_restart", service: d.svc }, d.svc + " redémarré");
+    case "scrub": return act({ action: d.running === "true" ? "scrub_stop" : "scrub_start", pool: d.pool }, d.running === "true" ? t("Scrub stopped on {pool}", { pool: d.pool }) : t("Scrub started on {pool}", { pool: d.pool }));
+    case "svc": return act({ action: "service_restart", service: d.svc }, t("{name} restarted", { name: d.svc }));
     case "ds-edit": return editDataset(d.ds, d.comp, d.quota, d.auto);
     case "ds-snap": return createSnap(d.ds);
     case "snap-del": return destroySnap(d.snap);
     case "snap-del-many": return destroySnaps(d.snap);
     case "logout": return post("/api/logout", {}).finally(() => location.reload());
     case "theme": { const k = Object.keys(THEMES); return setTheme(k[(k.indexOf(document.documentElement.dataset.theme || "") + 1) % k.length]); }
+    case "lang": {
+      const k = Object.keys(LANGS), l = k[(k.indexOf(LANG) + 1) % k.length];
+      try { localStorage.setItem("cairn-lang", l); } catch { /* not remembered */ }
+      return setLang(l);
+    }
   }
   if (!M) return;
   switch (d.act) {
@@ -999,7 +1019,7 @@ document.addEventListener("click", e => {
     case "share-edit": return shareForm(d.kind, d.name);
     case "share-del": return deleteShare(d.kind, d.name);
     case "tm-new": return tmForm();
-    case "alert-test": return mg({ op: "alert_test" }, "Alerte de test envoyée");
+    case "alert-test": return mg({ op: "alert_test" }, t("Test alert sent"));
     case "updates-apply": return applyUpdates();
     case "user-new": return userForm();
     case "user-pass": return passwordForm(d.name);
@@ -1009,7 +1029,7 @@ document.addEventListener("click", e => {
     case "group-del": return deleteAccount("group_delete", d.name);
     case "ds-new": return datasetForm();
     case "pool-new": return poolForm();
-    case "bonjour": return mg({ op: "bonjour", on: d.on === "1" }, d.on === "1" ? "Annonce Bonjour activée" : "Annonce Bonjour arrêtée");
+    case "bonjour": return mg({ op: "bonjour", on: d.on === "1" }, d.on === "1" ? t("Bonjour announcement on") : t("Bonjour announcement off"));
   }
 });
 // <details> keep their open state across re-renders ("toggle" does not bubble: capture).
@@ -1026,9 +1046,9 @@ document.addEventListener("pointerdown", () => { animUntil = Math.max(animUntil,
 // Built-in sign-in mode: /api/config answers 401 until signed in.
 async function signIn() {
   for (;;) {
-    const fd = await ask("Connexion", '<label>Identifiant<input name="user" required autocomplete="username" autocapitalize="off"></label>' +
-      '<label>Mot de passe<input type="password" name="password" required autocomplete="current-password"></label>' +
-      '<p class="sub">Compte du serveur membre du groupe d\'administration.</p>', "Se connecter");
+    const fd = await ask(t("Sign-in"), "<label>" + t("Username") + '<input name="user" required autocomplete="username" autocapitalize="off"></label>' +
+      "<label>" + t("Password") + '<input type="password" name="password" required autocomplete="current-password"></label>' +
+      '<p class="sub">' + t("A server account that belongs to the administration group.") + "</p>", t("Sign in"));
     if (!fd) continue;
     try {
       await post("/api/login", { user: fd.get("user").trim(), password: fd.get("password") });
@@ -1037,19 +1057,20 @@ async function signIn() {
   }
 }
 
-get("/api/config").then(t => {
-  CFG = JSON.parse(t);
+$("meta").textContent = t("Loading…");
+setLang(LANG); // static text first: the sign-in form may come before /api/config
+get("/api/config").then(txt => {
+  CFG = JSON.parse(txt);
   $("logout").hidden = !FEAT().login;
   UI = Object.assign({ labels: {}, tags: {}, assign: {} }, CFG.ui);
   document.title = CFG.title + " · Cairn";
   $("title").textContent = CFG.title;
   $("subtitle").textContent = CFG.subtitle || "";
   $("user").textContent = CFG.user;
-  buildGauges();
-  buildSystem();
+  setLang(pickLang(CFG.lang)); // the viewer's choice, else the server default; builds the gauges and system cards
   document.querySelector('#nav [data-view="comptes"]').hidden = !FEAT().users;
   show(location.hash.slice(1));
   slowTick().then(fastTick);
   setInterval(fastTick, FAST_MS);
   setInterval(slowTick, SLOW_MS);
-}).catch(e => e.status === 401 ? signIn() : banner("Configuration illisible : " + e.message));
+}).catch(e => e.status === 401 ? signIn() : banner(t("Unreadable configuration: {err}", { err: e.message })));
