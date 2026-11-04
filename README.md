@@ -9,6 +9,18 @@ page embedded: no database, no third-party JavaScript, a few MB of RAM.
 > author's NAS, but the standalone installer has seen little testing on
 > fresh machines. Issues and pull requests are welcome.
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png"><img src="docs/screenshots/overview-light.png" alt="Overview: CPU, memory, storage, temperature, disk health, pools, network, services"></picture>
+
+<table>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/stockage-dark.png"><img src="docs/screenshots/stockage-light.png" alt="Storage: ZFS pools and datasets"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/partages-dark.png"><img src="docs/screenshots/partages-light.png" alt="Shares: NFS and SMB, current SMB sessions"></picture></td></tr>
+<tr><td align="center">Storage</td><td align="center">Shares</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/disques-dark.png"><img src="docs/screenshots/disques-light.png" alt="Disks: per-pool activity, temperature, SMART health"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/services-dark.png"><img src="docs/screenshots/services-light.png" alt="Services, alerts, updates and action journal"></picture></td></tr>
+<tr><td align="center">Disks</td><td align="center">Services</td></tr>
+</table>
+
+Screenshots follow your GitHub theme (light or dark); the panel has both.
+Demo data.
+
 ## What it does
 
 - **Overview**: CPU, memory (including the ZFS ARC), network, disks and
