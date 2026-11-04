@@ -854,11 +854,16 @@ fn updates() -> Value {
     if let Some((_, v)) = c.as_ref().filter(|(t, _)| t.elapsed().as_secs() < 600) {
         return v.clone();
     }
-    let list = cmd(&["apt", "list", "--upgradable"]);
-    let pkgs: Vec<&str> = list.lines().filter(|l| l.contains('/')).filter_map(|l| l.split('/').next()).collect();
-    let v = json!({"packages": pkgs, "reboot": std::path::Path::new("/run/reboot-required").exists()});
+    let (pkgs, held) = upgradable(&cmd(&["apt", "list", "--upgradable"]), &cmd(&["apt-mark", "showhold"]));
+    let v = json!({"packages": pkgs, "held": held, "reboot": std::path::Path::new("/run/reboot-required").exists()});
     *c = Some((Instant::now(), v.clone()));
     v
+}
+
+/// From `apt list --upgradable` and `apt-mark showhold`: (to upgrade, held back).
+fn upgradable(list: &str, holds: &str) -> (Vec<String>, Vec<String>) {
+    let held: Vec<&str> = holds.lines().map(str::trim).collect();
+    list.lines().filter(|l| l.contains('/')).filter_map(|l| l.split('/').next()).map(String::from).partition(|p| !held.contains(&p.as_str()))
 }
 
 /// One write operation from the page; returns what to log (never a password).
@@ -1053,6 +1058,16 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             state["groups"].as_array_mut().ok_or("état illisible")?.retain(|g| g.as_str() != Some(name.as_str()));
             apply(cfg, &state)?;
             Ok(format!("op=group_delete name={name}"))
+        }
+        "updates_apply" => {
+            // Held packages (apt-mark hold) stay as they are; existing config files are kept.
+            let pkgs = updates()["packages"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")).unwrap_or_default();
+            run(&["apt-get", "update", "-q"], None)?;
+            let res = run(&["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confdef",
+                "-o", "Dpkg::Options::=--force-confold", "upgrade", "--with-new-pkgs"], None);
+            *UPDATES.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            res?;
+            Ok(format!("op=updates_apply packages={pkgs}"))
         }
         "alert_test" => {
             let a = cfg.alerts.as_ref().ok_or("alertes non configurées sur ce serveur")?;
@@ -1629,6 +1644,13 @@ mod tests {
         let p = pool_problems(list, status, 85);
         assert_eq!(p.keys().cloned().collect::<Vec<_>>(), ["errors:tank:2 data errors, use '-v' for a list", "full:tank", "pool:tank:DEGRADED"]);
         assert!(pool_problems("fast\tONLINE\t12%\n", "  pool: fast\nerrors: No known data errors\n", 85).is_empty());
+    }
+
+    #[test]
+    fn held_packages_stay_apart() {
+        let list = "En train de lister…\nwazuh-agent/stable 4.14.9-1 amd64 [upgradable from: 4.14.8-1]\nopenssl/trixie-security 3.5.4-1 amd64 [upgradable from: 3.5.1-1]\n";
+        let (up, held) = upgradable(list, "wazuh-agent\n");
+        assert_eq!((up, held), (vec!["openssl".to_string()], vec!["wazuh-agent".to_string()]));
     }
 
     #[test]

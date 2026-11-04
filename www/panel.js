@@ -672,16 +672,25 @@ function renderJournal() {
   const el = $("journal");
   el.hidden = !M;
   if (!M) return;
-  const u = M.updates, n = u.packages.length;
+  const u = M.updates, n = u.packages.length, held = u.held || [];
   $("updates").hidden = false;
-  $("updates").innerHTML = '<div class="card-head"><b>Mises à jour du système</b></div><div class="svc"><span class="dot ' + (n || u.reboot ? "warn" : "ok") + '"></span><span>' +
+  $("updates").innerHTML = '<div class="card-head"><b>Mises à jour du système</b>' + (n ? '<button class="primary" data-act="updates-apply">Mettre à jour</button>' : "") +
+    '</div><div class="svc"><span class="dot ' + (n || u.reboot ? "warn" : "ok") + '"></span><span>' +
     (n ? n + " paquet" + (n > 1 ? "s" : "") + " à mettre à jour" : "Système à jour") + (u.reboot ? " · redémarrage nécessaire" : "") + "</span></div>" +
-    (n ? '<p class="sub">' + u.packages.map(esc).join(", ") + "</p>" : "");
+    (n ? '<p class="sub">' + u.packages.map(esc).join(", ") + "</p>" : "") +
+    (held.length ? '<p class="sub">Retenus (apt-mark hold), non mis à jour : ' + held.map(esc).join(", ") + "</p>" : "");
   el.innerHTML = '<div class="card-head"><b>Journal des actions</b></div>' +
     (M.journal.length ? '<div class="table-wrap"><table><tbody>' + M.journal.map(l => {
       const [when, ...rest] = l.split(" ");
       return "<tr><td><small class=\"sys\">" + esc(new Date(when).toLocaleString("fr-FR")) + "</small></td><td>" + esc(rest.join(" ")) + "</td></tr>";
     }).join("") + "</tbody></table></div>" : '<p class="sub">Aucune action récente.</p>');
+}
+
+async function applyUpdates() {
+  const p = M.updates.packages;
+  const fd = await ask("Installer les mises à jour ?", "<p>" + p.length + " paquet" + (p.length > 1 ? "s" : "") + " : " + p.map(esc).join(", ") + "</p>" +
+    '<p class="sub">apt-get upgrade, fichiers de configuration conservés. Les services concernés redémarrent (Samba : connexions en cours coupées). Peut prendre quelques minutes.</p>', "Mettre à jour");
+  if (fd) return mg({ op: "updates_apply" }, "Mises à jour installées");
 }
 
 function renderAlerts() {
@@ -991,6 +1000,7 @@ document.addEventListener("click", e => {
     case "share-del": return deleteShare(d.kind, d.name);
     case "tm-new": return tmForm();
     case "alert-test": return mg({ op: "alert_test" }, "Alerte de test envoyée");
+    case "updates-apply": return applyUpdates();
     case "user-new": return userForm();
     case "user-pass": return passwordForm(d.name);
     case "user-groups": return userGroupsForm(d.name);
