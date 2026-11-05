@@ -320,6 +320,7 @@ function slowTick() {
         return acc;
       }, {}),
       statusOf: Object.fromEntries(status.split(/^\s*pool: /m).slice(1).map(b => [b.split("\n")[0].trim(), b])),
+      // name used avail refer ratio compression recordsize quota mountpoint auto-snapshot type volsize volblocksize
       datasets: ds.trim() ? ds.trim().split("\n").map(l => l.split("\t")) : [],
       snapshots: snaps.trim() ? snaps.trim().split("\n").map(l => l.split("\t")) : [],
       connected: new Set(ss.trim().split("\n").filter(Boolean).map(l => l.trim().split(/\s+/).at(-1).replace(/:\d+$/, ""))),
@@ -611,6 +612,8 @@ function diskActions(m) {
 /* storage */
 
 const poolName = n => UI.labels["pool:" + n] || n;
+const isVol = r => r[10] === "volume";
+const fsRows = () => S.datasets.filter(r => !isVol(r));
 
 function scanText(status) {
   const scan = (status.match(/^\s*scan: ([\s\S]*?)\nconfig:/m) || [, t("no scrub yet")])[1].replace(/\n\s+/g, " ").trim();
@@ -627,7 +630,7 @@ function scanProgress(scan) {
 
 function renderStorage() {
   $("storage-actions").innerHTML = FEAT().pools
-    ? '<button class="primary" data-act="ds-new">' + t("New dataset") + '</button><button data-act="pool-new">' + t("New pool") + "</button>" : "";
+    ? '<button class="primary" data-act="ds-new">' + t("New dataset") + '</button><button data-act="zvol-new">' + t("New volume") + '</button><button data-act="pool-new">' + t("New pool") + "</button>" : "";
   $("pools").innerHTML = Object.values(S.pools).map(p => {
     const st = S.statusOf[p.name] || "", scan = scanText(st);
     const errors = (st.match(/^errors: (.*)$/m) || [, "?"])[1];
@@ -640,10 +643,12 @@ function renderStorage() {
     stat(t("Fragmentation"), p.fragmentation + " %", "") + (errors.startsWith("No known") ? stat(t("Errors"), t("None"), "ok") : stat(t("Errors"), errors, "bad")) + "</div>" +
     '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" + scanProgress(scan) +
     (scan.resilver ? "" : '<button data-act="scrub" data-pool="' + esc(p.name) + '" data-running="' + scan.running + '" class="' + (scan.running ? "danger" : "primary") + '">' +
-    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") + "</article>";
+    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") +
+    (FEAT().pools ? ' <button class="danger" data-act="pool-del" data-pool="' + esc(p.name) + '">' + t("Delete the pool") + "</button>" : "") + "</article>";
   }).join("");
 
-  const rows = byTag(S.datasets, r => "ds:" + r[0]);
+  const del = name => FEAT().pools && name.includes("/") ? '<button class="danger" data-act="ds-del" data-ds="' + esc(name) + '">' + t("Delete") + "</button>" : "";
+  const rows = byTag(fsRows(), r => "ds:" + r[0]);
   $("datasets").innerHTML = "<thead><tr>" + ["Dataset", "Used", "Available", "Compression", "Ratio", "Block size", "Quota"].concat(FEAT().autosnap ? ["Auto snapshots"] : [], [""])
     .map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
     rows.map(([name, used, avail, , ratio, comp, rs, quota, , auto]) =>
@@ -652,7 +657,17 @@ function renderStorage() {
       (FEAT().autosnap ? "</td><td>" + (auto === "true" ? t("yes") : t("no")) : "") +
       '</td><td class="actions"><button data-act="ds-edit" data-ds="' + esc(name) + '" data-comp="' + esc(comp) + '" data-quota="' + (quota === "0" ? "none" : esc(quota)) +
       '" data-auto="' + (auto === "true" ? "true" : "false") +
-      '">' + t("Edit") + '</button><button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button></td></tr>").join("") + "</tbody>";
+      '">' + t("Edit") + '</button><button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + del(name) + "</td></tr>").join("") + "</tbody>";
+
+  // ZFS volumes (block devices, /dev/zvol/<name>): size, space used, compression.
+  const vols = byTag(S.datasets.filter(isVol), r => "ds:" + r[0]);
+  $("zvols-h").hidden = $("zvols-card").hidden = !vols.length;
+  $("zvols").innerHTML = "<thead><tr>" + ["Volume", "Size", "Used", "Ratio", "Block size", "Compression", ""].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
+    vols.map(([name, used, , , ratio, comp, , , , , , size, vbs]) =>
+      "<tr><td>" + nameBlock("ds:" + name, name, name) + "</td><td>" + bytes(Number(size)) + "</td><td>" + bytes(Number(used)) + "</td><td>× " + nf(Number(ratio), 2) +
+      "</td><td>" + bytes(Number(vbs)) + "</td><td>" + esc(comp) + '</td><td class="actions">' +
+      (FEAT().pools ? '<button data-act="zvol-grow" data-ds="' + esc(name) + '" data-size="' + esc(size) + '">' + t("Grow") + "</button>" : "") +
+      '<button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + del(name) + "</td></tr>").join("") + "</tbody>";
 
   // Rotating snapshots (zfs-auto-snapshot) are summed up per label, not listed.
   const auto = {}, manual = [];
@@ -913,7 +928,7 @@ async function tmForm() {
   const fd = await ask(t("New Time Machine destination"),
     "<label>" + t("Mac name (account and share)") + '<input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\\-]*" placeholder="' + t("e.g. macbook-pro") + '" autocomplete="off"></label>' +
     "<label>" + t("Dataset") + '<input name="ds" required list="tm-ds" placeholder="' + t("e.g. tank/timemachine/macbook-pro") + '"></label>' +
-    '<datalist id="tm-ds">' + S.datasets.map(r => '<option value="' + esc(r[0]) + '">').join("") + "</datalist>" +
+    '<datalist id="tm-ds">' + fsRows().map(r => '<option value="' + esc(r[0]) + '">').join("") + "</datalist>" +
     '<p class="sub">' + (pools ? t("Existing: reused. New: created with this quota, 1M blocks, no automatic snapshots.")
       : t("Existing dataset only (created by the administrator, ideally with a quota).")) + "</p>" +
     "<label>" + t("Reserved size") + '<input name="size" required pattern="[0-9]+(\\.[0-9]+)?[KMGT]" value="2T"></label>' +
@@ -982,7 +997,7 @@ async function groupForm() {
 }
 
 async function datasetForm() {
-  const fd = await ask(t("New dataset"), "<label>" + t("In") + '<select name="parent">' + S.datasets.map(r => "<option>" + esc(r[0]) + "</option>").join("") + "</select></label>" +
+  const fd = await ask(t("New dataset"), "<label>" + t("In") + '<select name="parent">' + fsRows().map(r => "<option>" + esc(r[0]) + "</option>").join("") + "</select></label>" +
     "<label>" + t("Name") + '<input name="leaf" required pattern="[A-Za-z0-9_.:\\-]+" placeholder="' + t("e.g. photos") + '"></label>' +
     "<label>" + t("Compression") + '<select name="comp">' + COMPRESSION.map(c => "<option>" + c + "</option>").join("") + "</select></label>", t("Create"));
   if (fd) mg({ op: "dataset_create", dataset: fd.get("parent") + "/" + fd.get("leaf"), compression: fd.get("comp") }, t("Dataset {name} created", { name: fd.get("parent") + "/" + fd.get("leaf") }));
@@ -1001,6 +1016,50 @@ async function poolForm() {
       esc(d.dev) + " · " + bytes(d.size) + " · " + esc(d.model) + "</label>").join("") + "</fieldset>" +
     "<label>" + t("Confirmation: retype the pool name") + '<input name="confirm" required autocomplete="off"></label>', t("Create the pool"), true);
   if (fd) mg({ op: "pool_create", name: fd.get("name"), layout: fd.get("layout"), disks: fd.getAll("d"), confirm: fd.get("confirm") }, t("Pool {name} created", { name: fd.get("name") }));
+}
+
+// ZFS volume (zvol): a block device of a fixed size, e.g. a VM disk. It can grow, never shrink.
+async function zvolForm() {
+  const fd = await ask(t("New volume"), '<p class="sub">' + t("A block device of a fixed size (/dev/zvol/…), e.g. a virtual machine disk. It can be grown later, never shrunk.") + "</p>" +
+    "<label>" + t("In") + '<select name="parent">' + fsRows().map(r => "<option>" + esc(r[0]) + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Name") + '<input name="leaf" required pattern="[A-Za-z0-9_.:\\-]+" placeholder="' + t("e.g. vm-disk") + '"></label>' +
+    "<label>" + t("Size (e.g. 100G, 1.5T)") + '<input name="size" required pattern="[0-9]+(\\.[0-9]+)?[KMGTPkmgtp]?"></label>' +
+    '<label class="check"><input type="checkbox" name="sparse" checked> ' + t("Thin (sparse): space is taken as data is written") + "</label>" +
+    "<label>" + t("Block size") + '<select name="vbs">' + ["8K", "16K", "32K", "64K", "128K"].map(b => "<option" + (b === "16K" ? " selected" : "") + ">" + b + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Compression") + '<select name="comp">' + COMPRESSION.map(c => "<option>" + c + "</option>").join("") + "</select></label>" +
+    '<p class="sub">' + t("Not thin: the whole size is reserved in the pool now, so writes never fail for lack of space. The block size cannot be changed afterwards.") + "</p>", t("Create"));
+  const name = fd && fd.get("parent") + "/" + fd.get("leaf");
+  if (fd) mg({ op: "zvol_create", dataset: name, size: fd.get("size"), sparse: !!fd.get("sparse"), volblocksize: fd.get("vbs"), compression: fd.get("comp") }, t("Volume {name} created", { name }));
+}
+async function zvolGrow(name, size) {
+  const fd = await ask(t("Grow {name}", { name }), "<p>" + t("Current size: {size}", { size: bytes(Number(size)) }) + "</p>" +
+    "<label>" + t("New size (e.g. 200G, 2T)") + '<input name="size" required pattern="[0-9]+(\\.[0-9]+)?[KMGTPkmgtp]?"></label>' +
+    '<p class="sub">' + t("A volume can only grow. Then extend the partition and file system inside it, from the machine that uses it.") + "</p>", t("Grow"));
+  if (fd) mg({ op: "zvol_grow", dataset: name, size: fd.get("size") }, t("{name} grown", { name }));
+}
+
+// Deletion: permanent, the full name retyped; the server refuses while a share, an export or a replication uses it.
+const confirmName = () => "<label>" + t("Confirmation: retype the full name") + '<input name="confirm" required autocomplete="off"></label>';
+async function destroyDataset(name) {
+  const kids = S.datasets.filter(r => r[0].startsWith(name + "/")).map(r => r[0]);
+  const snaps = S.snapshots.filter(s => s[0].startsWith(name + "@") || s[0].startsWith(name + "/")).length;
+  const vol = isVol(S.datasets.find(r => r[0] === name) || []);
+  const fd = await ask(t("Delete {name}?", { name }),
+    "<p>" + t(vol ? "Deletion is permanent: the volume <b>{name}</b>, its data and all its snapshots are destroyed. There is no undo."
+      : "Deletion is permanent: <b>{name}</b>, its files and all its snapshots are destroyed. There is no undo.", { name: esc(name) }) + "</p>" +
+    (snaps ? '<p class="sub">' + tp(snaps, "{n} snapshot is deleted with it.", "{n} snapshots are deleted with it.") + "</p>" : "") +
+    (kids.length ? '<p class="sub">' + t("Child datasets:") + "<br>" + kids.map(esc).join("<br>") + "</p>" +
+      '<label class="check"><input type="checkbox" name="r"> ' + t("With its children ({n}), deleted too", { n: kids.length }) + "</label>" : "") +
+    '<p class="sub">' + t("Refused while a share, an export or a replication uses it, or while its files are open.") + "</p>" + confirmName(), t("Delete permanently"), true);
+  if (fd) mg({ op: "dataset_destroy", dataset: name, confirm: fd.get("confirm"), recursive: !!fd.get("r") }, t("{name} deleted", { name }));
+}
+async function destroyPool(pool) {
+  const n = S.datasets.filter(r => r[0].startsWith(pool + "/")).length;
+  const fd = await ask(t("Delete the pool {pool}?", { pool }),
+    "<p>" + t("Deletion is permanent: the pool <b>{pool}</b> and everything in it ({n} datasets and volumes, all snapshots) are destroyed. There is no undo.", { pool: esc(pool), n }) + "</p>" +
+    '<p class="sub">' + t("Refused while a share, an export or a replication points into it. The disks are left as they are (not wiped): they become free again only once erased.") + "</p>" +
+    confirmPool(pool), t("Delete permanently"), true);
+  if (fd) mg({ op: "pool_destroy", pool, confirm: fd.get("confirm") }, t("Pool {name} deleted", { name: pool }));
 }
 
 // Disk replacement (features.disks): offline and replace need the pool name retyped.
@@ -1146,6 +1205,10 @@ document.addEventListener("click", e => {
     case "group-del": return deleteAccount("group_delete", d.name);
     case "ds-new": return datasetForm();
     case "pool-new": return poolForm();
+    case "zvol-new": return zvolForm();
+    case "zvol-grow": return zvolGrow(d.ds, d.size);
+    case "ds-del": return destroyDataset(d.ds);
+    case "pool-del": return destroyPool(d.pool);
     case "disk-offline": return diskOffline(d.pool, d.dev);
     case "disk-online": return mg({ op: "disk_online", pool: d.pool, device: d.dev }, t("{dev} is back online", { dev: d.dev }));
     case "disk-replace": return diskReplace(d.pool, d.dev);

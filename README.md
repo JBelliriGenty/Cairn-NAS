@@ -28,8 +28,9 @@ Demo data.
 - **Overview**: CPU, memory (including the ZFS ARC), network, disks and
   temperatures, live.
 - **Disks**: SMART health (NVMe wear, reallocated sectors, errors).
-- **Storage**: ZFS pools and datasets (compression, quota, automatic
-  snapshots on/off), manual snapshots, scrub.
+- **Storage**: ZFS pools, datasets (compression, quota, automatic
+  snapshots on/off) and volumes (zvols: size, space used, ratio), manual
+  snapshots, scrub.
 - **NFS and SMB shares**: created from the page, access by account or group,
   SMB3 minimum, encryption preferred or required, Time Machine, Windows
   Previous Versions, recycle bin, per-share firewall opening (nftables).
@@ -45,9 +46,30 @@ Demo data.
   ntfy or any webhook (text POST).
 - **Dashboards**: read-only JSON summary for Homepage and the like.
 
-Optional (off by default): creating datasets and pools on blank disks
-(`features.pools`); replacing a pool's disks (`features.disks`); pull
-replication between two Cairn machines (`features.replication`), see below.
+Optional (off by default): creating and deleting datasets, volumes and
+pools (`features.pools`, see below); replacing a pool's disks
+(`features.disks`); pull replication between two Cairn machines
+(`features.replication`), see below.
+
+## Datasets, volumes and pools (`features.pools`)
+
+In **Storage**: *New dataset*, *New volume* (zvol: size such as `100G` or
+`1.5T`, thin or fully reserved, block size 8K to 128K, compression; it can
+grow, never shrink), *New pool* on blank disks only, and *Delete* on
+datasets, volumes and pools.
+
+Deletion is permanent, snapshots included. The server refuses rather than
+warns:
+- unless the full name (or the pool name) is typed again;
+- while an NFS or SMB share of the panel, a path of `/etc/exports` or a
+  replication points into it (children included);
+- a dataset with child datasets, unless *With its children* is ticked
+  (`zfs destroy -r`); its own snapshots always go with it;
+- the root dataset of a pool: delete the pool instead (`zpool destroy`,
+  never forced; the disks are left as they are, not wiped).
+
+Never `-f` or `-R`: a busy mount, a hold or a clone makes `zfs` refuse, and
+its message is shown. Every deletion is in the action journal.
 
 ## Disk replacement (`features.disks`)
 

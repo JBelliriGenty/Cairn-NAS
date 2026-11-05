@@ -79,6 +79,33 @@ const DICT = {
     "Allocated": "Occupé", "Raw size": "Taille brute", "Fragmentation": "Fragmentation", "Errors": "Erreurs",
     "Last scrub: {v}": "Dernier scrub : {v}", "Stop scrub": "Arrêter le scrub", "Start a scrub": "Lancer un scrub",
     "Dataset": "Dataset", "Used": "Utilisé", "Available": "Disponible", "Compression": "Compression", "Ratio": "Gain",
+    "New volume": "Nouveau volume", "Volumes": "Volumes", "Volume": "Volume", "Size": "Taille", "Grow": "Agrandir",
+    "Delete the pool": "Supprimer le pool", "Delete permanently": "Supprimer définitivement",
+    "A block device of a fixed size (/dev/zvol/…), e.g. a virtual machine disk. It can be grown later, never shrunk.":
+      "Un périphérique bloc de taille fixe (/dev/zvol/…), par ex. le disque d'une machine virtuelle. Il peut être agrandi plus tard, jamais réduit.",
+    "e.g. vm-disk": "ex. disque-vm", "Size (e.g. 100G, 1.5T)": "Taille (ex. 100G, 1.5T)",
+    "Thin (sparse): space is taken as data is written": "Allocation dynamique (sparse) : l'espace est pris au fil des écritures",
+    "Not thin: the whole size is reserved in the pool now, so writes never fail for lack of space. The block size cannot be changed afterwards.":
+      "Sans allocation dynamique : toute la taille est réservée dans le pool dès maintenant, les écritures ne manquent donc jamais de place. La taille de bloc ne peut plus être changée ensuite.",
+    "Volume {name} created": "Volume {name} créé", "Grow {name}": "Agrandir {name}", "Current size: {size}": "Taille actuelle : {size}",
+    "New size (e.g. 200G, 2T)": "Nouvelle taille (ex. 200G, 2T)",
+    "A volume can only grow. Then extend the partition and file system inside it, from the machine that uses it.":
+      "Un volume ne peut que grandir. Étendez ensuite la partition et le système de fichiers qu'il contient, depuis la machine qui l'utilise.",
+    "{name} grown": "{name} agrandi", "Confirmation: retype the full name": "Confirmation : retapez le nom complet",
+    "Deletion is permanent: the volume <b>{name}</b>, its data and all its snapshots are destroyed. There is no undo.":
+      "La suppression est définitive : le volume <b>{name}</b>, ses données et tous ses snapshots sont détruits. Aucun retour en arrière.",
+    "Deletion is permanent: <b>{name}</b>, its files and all its snapshots are destroyed. There is no undo.":
+      "La suppression est définitive : <b>{name}</b>, ses fichiers et tous ses snapshots sont détruits. Aucun retour en arrière.",
+    "{n} snapshot is deleted with it.": "{n} snapshot est supprimé avec lui.", "{n} snapshots are deleted with it.": "{n} snapshots sont supprimés avec lui.",
+    "Child datasets:": "Datasets enfants :", "With its children ({n}), deleted too": "Avec ses enfants ({n}), supprimés aussi",
+    "Refused while a share, an export or a replication uses it, or while its files are open.":
+      "Refusé tant qu'un partage, un export ou une réplication l'utilise, ou que ses fichiers sont ouverts.",
+    "Delete the pool {pool}?": "Supprimer le pool {pool} ?",
+    "Deletion is permanent: the pool <b>{pool}</b> and everything in it ({n} datasets and volumes, all snapshots) are destroyed. There is no undo.":
+      "La suppression est définitive : le pool <b>{pool}</b> et tout son contenu ({n} datasets et volumes, tous les snapshots) sont détruits. Aucun retour en arrière.",
+    "Refused while a share, an export or a replication points into it. The disks are left as they are (not wiped): they become free again only once erased.":
+      "Refusé tant qu'un partage, un export ou une réplication pointe dedans. Les disques restent en l'état (non effacés) : ils ne redeviennent libres qu'une fois effacés.",
+    "Pool {name} deleted": "Pool {name} supprimé",
     "Block size": "Bloc", "Quota": "Quota", "Auto snapshots": "Snapshots auto", "Snapshot": "Snapshot",
     "No snapshots. Use the “Snapshot” button on a dataset to create one.": "Aucun snapshot. Bouton « Snapshot » sur un dataset pour en créer un.",
     "Unique size": "Taille propre", "Created": "Créé le", "{n} dataset": "{n} dataset", "{n} datasets": "{n} datasets",

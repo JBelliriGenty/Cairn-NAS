@@ -31,6 +31,7 @@ const CSS: &str = include_str!("../www/panel.css");
 const ICON: &str = include_str!("../www/icon.svg");
 const I18N: &str = include_str!("../www/i18n.js");
 const COMPRESSION: [&str; 5] = ["lz4", "zstd", "zstd-fast", "gzip", "off"];
+const VOLBLOCK: [&str; 5] = ["8K", "16K", "32K", "64K", "128K"]; // 8 KiB << index
 
 struct Config {
     listen: String,
@@ -244,7 +245,7 @@ fn slow(cfg: &Config) -> String {
         // Every imported pool: a pool added later shows up without any config change.
         cmd(&["zpool", "get", "-Hp", "health,size,allocated,free,fragmentation,capacity"]),
         cmd(&["zpool", "status"]),
-        cmd(&["zfs", "list", "-Hp", "-o", "name,used,avail,refer,compressratio,compression,recordsize,quota,mountpoint,com.sun:auto-snapshot"]),
+        cmd(&["zfs", "list", "-Hp", "-t", "filesystem,volume", "-o", "name,used,avail,refer,compressratio,compression,recordsize,quota,mountpoint,com.sun:auto-snapshot,type,volsize,volblocksize"]),
         snaps,
         cmd(&["ss", "-Htn", "state", "established", "( sport = :2049 )"]),
         services,
@@ -464,6 +465,16 @@ const FR: &[(&str, &str)] = &[
     ("Time Machine size: e.g. 500G, 1T, or empty", "taille Time Machine : ex. 500G, 1T, ou vide"),
     ("remove it from the shares first: {}", "retirez-le d'abord des partages : {}"),
     ("size: e.g. 500G, 1T", "taille : ex. 500G, 1T"),
+    ("size: e.g. 100G, 1.5T", "taille : ex. 100G, 1.5T"),
+    ("volume refused (existing parent dataset + simple name)", "volume refusé (dataset parent existant + nom simple)"),
+    ("block size: 8K to 128K", "taille de bloc : 8K à 128K"),
+    ("unknown volume", "volume inconnu"),
+    ("a volume can only grow: give a size larger than the current one", "un volume ne peut que grandir : indiquez une taille supérieure à l'actuelle"),
+    ("never the root of a pool: delete the pool instead", "jamais la racine d'un pool : supprimez plutôt le pool"),
+    ("unknown dataset", "dataset inconnu"),
+    ("confirmation: type the full name again", "confirmation : retapez le nom complet"),
+    ("still in use, remove it first from: {}", "encore utilisé, retirez-le d'abord de : {}"),
+    ("it has child datasets: tick “with its children” to delete them too", "il contient des datasets enfants : cochez « avec ses enfants » pour les supprimer aussi"),
     ("{}: offlining this disk would leave no redundancy, replace it instead (the old disk keeps working until the copy is done)",
         "{} : mettre ce disque hors ligne ne laisserait aucune redondance, remplacez-le plutôt (l'ancien disque reste en service jusqu'à la fin de la copie)"),
     ("not a disk of this pool", "pas un disque de ce pool"),
@@ -1356,6 +1367,18 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&["zfs", "create", "-o", &format!("compression={comp}"), &ds], None)?;
             Ok(format!("op=dataset_create dataset={ds} compression={comp}"))
         }
+        "zvol_create" | "zvol_grow" | "dataset_destroy" | "pool_destroy" => {
+            // Destroys: shares, exports and replications are checked first, never -f or -R.
+            need(f.pools)?;
+            let argv = if op.starts_with("zvol") {
+                zvol_argv(&op, a, &zfs_rows())?
+            } else {
+                let snaps: Vec<String> = cmd(&["zfs", "list", "-H", "-t", "snapshot", "-o", "name"]).lines().map(String::from).collect();
+                destroy_argv(&op, a, &zfs_rows(), &snaps, &pools(), &state, &admin_exports())?
+            };
+            run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
+            Ok(format!("op={op} argv={}", argv.join(" ")))
+        }
         "pool_create" => {
             need(f.pools)?;
             let (layout, wanted) = (s("layout"), strings(a, "disks"));
@@ -1669,6 +1692,136 @@ fn pull(cfg: &Config) -> i32 {
         }
     }
     i32::from(failed > 0)
+}
+
+/// One row of `zfs list -Hp -t filesystem,volume -o name,type,mountpoint,volsize,volblocksize`.
+struct Zrow {
+    name: String,
+    kind: String, // filesystem | volume
+    mount: String,
+    volsize: u64, // 0 for a filesystem
+    block: u64,
+}
+
+fn parse_zrows(out: &str) -> Vec<Zrow> {
+    out.lines().filter_map(|l| {
+        let f: Vec<&str> = l.split('\t').collect();
+        let [name, kind, mount, vs, bs] = f[..] else { return None };
+        Some(Zrow { name: name.into(), kind: kind.into(), mount: mount.into(), volsize: vs.parse().unwrap_or(0), block: bs.parse().unwrap_or(0) })
+    }).collect()
+}
+
+fn zfs_rows() -> Vec<Zrow> {
+    parse_zrows(&cmd(&["zfs", "list", "-Hp", "-t", "filesystem,volume", "-o", "name,type,mountpoint,volsize,volblocksize"]))
+}
+
+/// "100G", "1.5T", "512M" in bytes (powers of 1024); None for anything else.
+fn size_bytes(s: &str) -> Option<u64> {
+    if s == "none" || !is_quota(s) {
+        return None;
+    }
+    let (num, unit) = match s.chars().last()? {
+        c if c.is_ascii_alphabetic() => (&s[..s.len() - 1], c.to_ascii_uppercase()),
+        _ => (s, 'B'),
+    };
+    let b = num.parse::<f64>().ok()? * 1024f64.powi("BKMGTP".find(unit)? as i32);
+    (1.0..9.0e18).contains(&b).then_some(b as u64)
+}
+
+/// Validated argv for zvol_create / zvol_grow. Sizes are sent in bytes,
+/// rounded up to the block size (zfs refuses any other volsize).
+fn zvol_argv(op: &str, a: &Value, rows: &[Zrow]) -> Result<Vec<String>, String> {
+    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    let ds = s("dataset");
+    let size = size_bytes(&s("size")).ok_or("size: e.g. 100G, 1.5T")?;
+    let v = |x: &[&str]| -> Vec<String> { x.iter().map(|s| s.to_string()).collect() };
+    if op == "zvol_grow" {
+        let vol = rows.iter().find(|r| r.name == ds && r.kind == "volume").ok_or("unknown volume")?;
+        let bs = vol.block.max(512);
+        let new = size.div_ceil(bs) * bs;
+        if new <= vol.volsize {
+            return Err("a volume can only grow: give a size larger than the current one".into());
+        }
+        return Ok(v(&["zfs", "set", &format!("volsize={new}"), &ds]));
+    }
+    let ok = ds.rsplit_once('/').is_some_and(|(p, leaf)| rows.iter().any(|r| r.name == p && r.kind == "filesystem") && is_name(leaf));
+    if !ok || rows.iter().any(|r| r.name == ds) {
+        return Err("volume refused (existing parent dataset + simple name)".into());
+    }
+    let (bs, comp) = (s("volblocksize"), s("compression"));
+    let block = 8192u64 << VOLBLOCK.iter().position(|b| *b == bs).ok_or("block size: 8K to 128K")?;
+    if !COMPRESSION.contains(&comp.as_str()) {
+        return Err("value refused".into());
+    }
+    let mut argv = v(&["zfs", "create"]);
+    if a["sparse"] == true {
+        argv.push("-s".into()); // thin: no space reserved up front
+    }
+    argv.extend(v(&["-V", &(size.div_ceil(block) * block).to_string(), "-o", &format!("volblocksize={bs}"), "-o", &format!("compression={comp}"), &ds]));
+    Ok(argv)
+}
+
+/// What still points into these datasets: the panel's shares, /etc/exports, replications.
+fn in_use(state: &Value, exports: &[String], under: &[&Zrow]) -> Vec<String> {
+    // A mount point of "/" (root on ZFS) contains every path.
+    let mounts: Vec<&str> = under.iter().filter(|r| r.mount.starts_with('/')).map(|r| r.mount.trim_end_matches('/')).collect();
+    let inside = |p: &str| mounts.iter().any(|m| p == *m || p.starts_with(&format!("{m}/")));
+    let names: Vec<&str> = under.iter().map(|r| r.name.as_str()).collect();
+    let mut out = vec![];
+    for kind in ["nfs", "smb"] {
+        for (n, sh) in state[kind].as_object().into_iter().flatten() {
+            if inside(sh["path"].as_str().unwrap_or("")) {
+                out.push(format!("{kind}:{n}"));
+            }
+        }
+    }
+    out.extend(exports.iter().filter(|p| inside(p)).map(|p| format!("/etc/exports:{p}")));
+    for (host, e) in state["repl_allow"].as_object().into_iter().flatten() {
+        if strings(e, "datasets").iter().any(|d| names.contains(&d.as_str())) {
+            out.push(format!("repl:{host}"));
+        }
+    }
+    out.extend(state["repl_pull"].as_object().into_iter().flatten().filter(|(t, _)| names.contains(&t.as_str())).map(|(t, _)| format!("repl:{t}")));
+    out
+}
+
+/// Validated argv for dataset_destroy (a dataset or a volume, never a pool
+/// root) and pool_destroy: full name retyped, refused while anything uses it.
+/// Snapshots go with it (-r); child datasets only when asked. Never -f or -R:
+/// a busy mount, a hold or a clone makes zfs refuse, and its message is shown.
+fn destroy_argv(op: &str, a: &Value, rows: &[Zrow], snaps: &[String], pools: &[String], state: &Value, exports: &[String]) -> Result<Vec<String>, String> {
+    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    let pool_op = op == "pool_destroy";
+    let target = if pool_op { s("pool") } else { s("dataset") };
+    if pool_op && !pools.contains(&target) {
+        return Err("unknown pool".into());
+    }
+    if !pool_op && !target.contains('/') {
+        return Err("never the root of a pool: delete the pool instead".into());
+    }
+    if !pool_op && !rows.iter().any(|r| r.name == target) {
+        return Err("unknown dataset".into());
+    }
+    if s("confirm") != target {
+        return Err(if pool_op { "confirmation: type the pool name again" } else { "confirmation: type the full name again" }.into());
+    }
+    let under: Vec<&Zrow> = rows.iter().filter(|r| r.name == target || r.name.starts_with(&format!("{target}/"))).collect();
+    let used = in_use(state, exports, &under);
+    if !used.is_empty() {
+        return Err(format!("still in use, remove it first from: {}", used.join(", ")));
+    }
+    if pool_op {
+        return Ok(vec!["zpool".into(), "destroy".into(), target]); // the disks' partitions stay as they are
+    }
+    if under.len() > 1 && a["recursive"] != true {
+        return Err("it has child datasets: tick “with its children” to delete them too".into());
+    }
+    let mut argv = vec!["zfs".to_string(), "destroy".into()];
+    if under.len() > 1 || snaps.iter().any(|n| n.starts_with(&format!("{target}@"))) {
+        argv.push("-r".into());
+    }
+    argv.push(target);
+    Ok(argv)
 }
 
 fn is_name(s: &str) -> bool {
@@ -2332,6 +2485,66 @@ mod tests {
         names.push("b/t@zfs-auto-snap_daily-1".into());
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         assert_eq!(to_prune(&refs), ["b/t@zfs-auto-snap_frequent-0", "b/t@zfs-auto-snap_frequent-1"]);
+    }
+
+    #[test]
+    fn zvols() {
+        let rows = parse_zrows("tank\tfilesystem\t/tank\t-\t-\ntank/vm\tvolume\t-\t10737418240\t16384\nbad\n");
+        assert_eq!(rows.len(), 2);
+        let go = |a: Value| zvol_argv(a["op"].as_str().unwrap(), &a, &rows);
+        assert_eq!(size_bytes("1.5T"), Some(3 << 39));
+        assert_eq!(size_bytes("100g"), Some(100 << 30));
+        assert!(size_bytes("none").is_none() && size_bytes("-1G").is_none() && size_bytes("1e9").is_none() && size_bytes("").is_none());
+        assert_eq!(go(json!({"op": "zvol_create", "dataset": "tank/win", "size": "100G", "sparse": true, "volblocksize": "16K", "compression": "lz4"})).unwrap(),
+            ["zfs", "create", "-s", "-V", "107374182400", "-o", "volblocksize=16K", "-o", "compression=lz4", "tank/win"]);
+        // Not a multiple of the block: rounded up; not sparse = no -s.
+        assert_eq!(go(json!({"op": "zvol_create", "dataset": "tank/w", "size": "1.1K", "volblocksize": "8K", "compression": "off"})).unwrap()[2..4], ["-V", "8192"]);
+        for bad in [json!({"dataset": "tank/vm"}), json!({"dataset": "tank/vm/x"}), json!({"dataset": "other/x"}), json!({"dataset": "tank"}), json!({"dataset": "tank/a b"}),
+            json!({"size": "1G; rm"}), json!({"size": "none"}), json!({"volblocksize": "4K"}), json!({"compression": "x"})] {
+            let mut a = json!({"op": "zvol_create", "dataset": "tank/x", "size": "1G", "volblocksize": "8K", "compression": "lz4"});
+            a.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+            assert!(go(a.clone()).is_err(), "{a}");
+        }
+        assert_eq!(go(json!({"op": "zvol_grow", "dataset": "tank/vm", "size": "20G"})).unwrap(), ["zfs", "set", "volsize=21474836480", "tank/vm"]);
+        assert_eq!(go(json!({"op": "zvol_grow", "dataset": "tank/vm", "size": "10G"})).unwrap_err(), "a volume can only grow: give a size larger than the current one");
+        assert!(go(json!({"op": "zvol_grow", "dataset": "tank/vm", "size": "5G"})).is_err());
+        assert_eq!(go(json!({"op": "zvol_grow", "dataset": "tank", "size": "50G"})).unwrap_err(), "unknown volume");
+    }
+
+    #[test]
+    fn destroys() {
+        let rows = parse_zrows("tank\tfilesystem\t/tank\t-\t-\ntank/a\tfilesystem\t/tank/a\t-\t-\ntank/a/b\tfilesystem\t/srv/b\t-\t-\n\
+            tank/ab\tfilesystem\t/tank/ab\t-\t-\ntank/vm\tvolume\t-\t1073741824\t16384\nfast\tfilesystem\t/fast\t-\t-\n");
+        let snaps = ["tank/vm@s1".to_string(), "tank/ab2@x".to_string()];
+        let pools = ["tank".to_string(), "fast".to_string()];
+        let empty = json!({"nfs": {}, "smb": {}});
+        let go = |a: Value, st: &Value, ex: &[String]| destroy_argv(a["op"].as_str().unwrap(), &a, &rows, &snaps, &pools, st, ex);
+        let ds = |d: &str, c: &str, r: bool| json!({"op": "dataset_destroy", "dataset": d, "confirm": c, "recursive": r});
+        assert_eq!(go(ds("tank/ab", "tank/ab", false), &empty, &[]).unwrap(), ["zfs", "destroy", "tank/ab"]); // tank/ab2@x is not its snapshot
+        assert_eq!(go(ds("tank/vm", "tank/vm", false), &empty, &[]).unwrap(), ["zfs", "destroy", "-r", "tank/vm"]); // its snapshots go too
+        assert_eq!(go(ds("tank/a", "tank/a", false), &empty, &[]).unwrap_err(), "it has child datasets: tick “with its children” to delete them too");
+        assert_eq!(go(ds("tank/a", "tank/a", true), &empty, &[]).unwrap(), ["zfs", "destroy", "-r", "tank/a"]);
+        assert_eq!(go(ds("tank", "tank", true), &empty, &[]).unwrap_err(), "never the root of a pool: delete the pool instead");
+        assert_eq!(go(ds("tank/zz", "tank/zz", false), &empty, &[]).unwrap_err(), "unknown dataset");
+        assert_eq!(go(ds("tank/ab", "ab", false), &empty, &[]).unwrap_err(), "confirmation: type the full name again");
+        assert!(go(ds("tank/ab -r", "tank/ab -r", false), &empty, &[]).is_err());
+        assert!(go(ds("tank/ab@x", "tank/ab@x", false), &empty, &[]).is_err());
+        // Shares (the panel's, a child mounted elsewhere), /etc/exports, replications.
+        let st = json!({"nfs": {"media": {"path": "/srv/b"}}, "smb": {"P": {"path": "/tank/ab"}}, "repl_allow": {"10.0.0.1": {"datasets": ["fast"]}}});
+        assert_eq!(go(ds("tank/a", "tank/a", true), &st, &[]).unwrap_err(), "still in use, remove it first from: nfs:media");
+        assert_eq!(go(ds("tank/ab", "tank/ab", false), &st, &[]).unwrap_err(), "still in use, remove it first from: smb:P");
+        assert!(go(ds("tank/vm", "tank/vm", false), &st, &[]).is_ok());
+        assert_eq!(go(ds("tank/ab", "tank/ab", false), &empty, &["/tank/ab/sub".into()]).unwrap_err(), "still in use, remove it first from: /etc/exports:/tank/ab/sub");
+        assert!(go(ds("tank/ab", "tank/ab", false), &empty, &["/tank/abc".into()]).is_ok());
+        let pool = |p: &str, c: &str| json!({"op": "pool_destroy", "pool": p, "confirm": c});
+        assert_eq!(go(pool("fast", "fast"), &st, &[]).unwrap_err(), "still in use, remove it first from: repl:10.0.0.1");
+        assert_eq!(go(pool("fast", "fast"), &empty, &[]).unwrap(), ["zpool", "destroy", "fast"]);
+        assert_eq!(go(pool("tank", "tank"), &st, &[]).unwrap_err(), "still in use, remove it first from: nfs:media, smb:P");
+        assert_eq!(go(pool("fast", "Fast"), &empty, &[]).unwrap_err(), "confirmation: type the pool name again");
+        assert_eq!(go(pool("-f", "-f"), &empty, &[]).unwrap_err(), "unknown pool");
+        let pulled = json!({"repl_pull": {"tank/a/b": {"host": "nas", "source": "x"}}});
+        assert_eq!(go(ds("tank/a", "tank/a", true), &pulled, &[]).unwrap_err(), "still in use, remove it first from: repl:tank/a/b");
+        assert_eq!(tr("fr", "still in use, remove it first from: nfs:media"), "encore utilisé, retirez-le d'abord de : nfs:media");
     }
 
     #[test]
