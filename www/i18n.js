@@ -90,6 +90,22 @@ const DICT = {
     "Only blank disks are offered. <b>The chosen disks will be completely erased.</b>": "Seuls les disques vierges sont proposés. <b>Les disques choisis seront entièrement effacés.</b>",
     "e.g. data": "ex. data", "Layout": "Disposition", "Confirmation: retype the pool name": "Confirmation : retapez le nom du pool",
     "Create the pool": "Créer le pool", "Pool {name} created": "Pool {name} créé",
+    // disk replacement (features.disks)
+    "Bring online": "Remettre en ligne", "Take offline": "Mettre hors ligne", "Replace": "Remplacer",
+    "Resilver": "Reconstruction", "Scrub": "Scrub",
+    "{what}: {pct} % done, {eta} left": "{what} : {pct} % fait, encore {eta}", "{what}: {pct} % done": "{what} : {pct} % fait",
+    "Take {dev} offline?": "Mettre {dev} hors ligne ?",
+    "ZFS stops using this disk; <b>{pool}</b> keeps running on the others, with less redundancy, until the disk is brought back online or replaced.":
+      "ZFS cesse d'utiliser ce disque ; <b>{pool}</b> continue sur les autres, avec moins de redondance, jusqu'à ce que le disque soit remis en ligne ou remplacé.",
+    "Refused when the disk group would be left without redundancy: replace the disk instead, the old one keeps working until the copy is done.":
+      "Refusé si le groupe de disques se retrouvait sans redondance : remplacez plutôt le disque, l'ancien reste en service jusqu'à la fin de la copie.",
+    "{dev} is offline": "{dev} est hors ligne", "{dev} is back online": "{dev} est de nouveau en ligne",
+    "Replace {dev} in {pool}": "Remplacer {dev} dans {pool}", "New disk": "Nouveau disque",
+    "Plug in the new disk: it appears here once it is blank (no partition, no signature).":
+      "Branchez le nouveau disque : il apparaît ici une fois vierge (ni partition, ni signature).",
+    "ZFS copies the data onto the new disk (resilver), then detaches the old one. <b>The chosen disk will be completely erased.</b> It must be at least as large as the old one.":
+      "ZFS recopie les données sur le nouveau disque (reconstruction), puis détache l'ancien. <b>Le disque choisi sera entièrement effacé.</b> Il doit être au moins aussi grand que l'ancien.",
+    "Resilver started on {pool}": "Reconstruction lancée sur {pool}",
     "Mirror (RAID 1)": "Miroir (RAID 1)", "RAIDZ1 · 1 parity disk": "RAIDZ1 · 1 disque de parité",
     "RAIDZ2 · 2 parity disks": "RAIDZ2 · 2 disques de parité", "RAIDZ3 · 3 parity disks": "RAIDZ3 · 3 disques de parité",
     "Stripe without redundancy": "Agrégat sans redondance",

@@ -97,7 +97,7 @@ impl Config {
         let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
         public["recycle_days"] = json!(recycle_days); // the effective value, even when unset
         let f = |k: &str| v["features"][k].as_bool().unwrap_or(false);
-        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools") };
+        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), disks: f("disks") };
         let firewall_table = v["firewall_table"].as_str().map(String::from);
         let l = &v["login"];
         let login = l.is_object().then(|| Login {
@@ -117,7 +117,7 @@ impl Config {
             capacity_pct: a["capacity_pct"].as_u64().unwrap_or(85),
             interval_s: a["interval_s"].as_u64().unwrap_or(300).max(60),
         });
-        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools,
+        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "disks": features.disks,
             "firewall": firewall_table.is_some(), "login": login.is_some(), "autosnap": std::path::Path::new("/usr/sbin/zfs-auto-snapshot").exists()});
         Config {
             listen: s("listen", "127.0.0.1:9091"),
@@ -440,6 +440,13 @@ const FR: &[(&str, &str)] = &[
     ("Time Machine size: e.g. 500G, 1T, or empty", "taille Time Machine : ex. 500G, 1T, ou vide"),
     ("remove it from the shares first: {}", "retirez-le d'abord des partages : {}"),
     ("size: e.g. 500G, 1T", "taille : ex. 500G, 1T"),
+    ("{}: offlining this disk would leave no redundancy, replace it instead (the old disk keeps working until the copy is done)",
+        "{} : mettre ce disque hors ligne ne laisserait aucune redondance, remplacez-le plutôt (l'ancien disque reste en service jusqu'à la fin de la copie)"),
+    ("not a disk of this pool", "pas un disque de ce pool"),
+    ("a replacement or resilver is in progress on this pool: wait for it to finish", "un remplacement ou une reconstruction est en cours sur ce pool : attendez la fin"),
+    ("this disk is not offline", "ce disque n'est pas hors ligne"),
+    ("this disk is already offline", "ce disque est déjà hors ligne"),
+    ("replacement: a free disk only", "remplacement : un disque libre uniquement"),
     ("confirmation: type the pool name again", "confirmation : retapez le nom du pool"),
     ("{}: at least {} free disk(s), each used once", "{} : au moins {} disque(s) libre(s), chacun une seule fois"),
     ("invalid request", "requête invalide"),
@@ -648,6 +655,7 @@ struct Features {
     smb: bool,
     users: bool,
     pools: bool,
+    disks: bool, // take pool members offline/online, replace them
 }
 
 static MANAGE: Mutex<()> = Mutex::new(());
@@ -988,7 +996,7 @@ fn manage_view(cfg: &Config, lang: &str) -> Value {
         .collect();
     json!({
         "state": state, "users": users, "groups": groups, "mountpoints": mountpoints(), "admin_exports": admin_exports(),
-        "free_disks": if cfg.features.pools { json!(free_disks()) } else { json!([]) },
+        "free_disks": if cfg.features.pools || cfg.features.disks { json!(free_disks()) } else { json!([]) },
         "alerts": cfg.alerts.as_ref().map(|a| json!({
             // Host only: the URL may carry a topic name, the headers a token.
             "target": a.url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(""),
@@ -1348,8 +1356,111 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&argv, None)?;
             Ok(format!("op=pool_create name={name} layout={layout} disks={}", wanted.join(",")))
         }
+        "disk_offline" | "disk_online" | "disk_replace" => {
+            need(f.disks)?;
+            let pool = s("pool");
+            if !pools().contains(&pool) {
+                return Err("unknown pool".into());
+            }
+            let free: Vec<String> =
+                if op == "disk_replace" { free_disks().iter().filter_map(|d| d["id"].as_str().map(String::from)).collect() } else { vec![] };
+            let argv = disk_argv(&op, &pool, &cmd(&["zpool", "status", &pool]), &free, a)?;
+            run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
+            Ok(format!("op={op} pool={pool} device={} new={}", s("device"), s("new")))
+        }
         _ => Err("unknown operation".into()),
     }
+}
+
+/// (depth, name, state) of each row of the config section of `zpool status`.
+fn status_rows(status: &str) -> Vec<(usize, String, String)> {
+    let Some(config) = status.split("\nconfig:").nth(1) else { return vec![] };
+    config
+        .lines()
+        .skip_while(|l| !l.trim_start().starts_with("NAME"))
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .map(|l| {
+            let body = l.strip_prefix('\t').unwrap_or(l);
+            let mut f = body.split_whitespace();
+            (body.len() - body.trim_start().len(), f.next().unwrap_or("").to_string(), f.next().unwrap_or("").to_string())
+        })
+        .collect()
+}
+
+/// A top-level data vdev: its name, its leaves (name, state), and whether a
+/// replacing/spare vdev sits inside it.
+struct Vdev {
+    name: String,
+    leaves: Vec<(String, String)>,
+    nested: bool,
+}
+
+/// The data vdev of `pool` holding the leaf `dev` (never logs, cache or spares).
+fn vdev_of(rows: &[(usize, String, String)], pool: &str, dev: &str) -> Option<Vdev> {
+    let start = rows.iter().position(|r| r.0 == 0 && r.1 == pool)? + 1;
+    let body = &rows[start..start + rows[start..].iter().position(|r| r.0 == 0).unwrap_or(rows.len() - start)];
+    let mut i = 0;
+    while i < body.len() {
+        let top = &body[i];
+        let end = i + 1 + body[i + 1..].iter().position(|r| r.0 <= top.0).unwrap_or(body.len() - i - 1);
+        let kids = &body[i + 1..end];
+        let leaves: Vec<(String, String)> = if kids.is_empty() {
+            vec![(top.1.clone(), top.2.clone())]
+        } else {
+            kids.iter().enumerate().filter(|(k, r)| kids.get(k + 1).is_none_or(|n| n.0 <= r.0)).map(|(_, r)| (r.1.clone(), r.2.clone())).collect()
+        };
+        if leaves.iter().any(|l| l.0 == dev) {
+            return Some(Vdev { name: top.1.clone(), leaves, nested: kids.iter().any(|r| r.0 > top.0 + 2) });
+        }
+        i = end;
+    }
+    None
+}
+
+/// Disks of a vdev that may fail without losing data.
+fn parity(v: &Vdev) -> i64 {
+    if v.name.starts_with("mirror") {
+        return v.leaves.len() as i64 - 1;
+    }
+    let level = v.name.strip_prefix("raidz").or_else(|| v.name.strip_prefix("draid"));
+    level.map_or(0, |r| r.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(1) as i64)
+}
+
+/// Validated argv for disk_offline / disk_online / disk_replace on `pool`,
+/// from its `zpool status` and the free disks (by-id names).
+fn disk_argv(op: &str, pool: &str, status: &str, free: &[String], a: &Value) -> Result<Vec<String>, String> {
+    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    let dev = s("device");
+    let v = vdev_of(&status_rows(status), pool, &dev).ok_or("not a disk of this pool")?;
+    let state = v.leaves.iter().find(|l| l.0 == dev).map_or("", |l| l.1.as_str());
+    let argv = |x: &[&str]| x.iter().map(|s| s.to_string()).collect();
+    if op == "disk_online" {
+        return if state == "OFFLINE" { Ok(argv(&["zpool", "online", pool, &dev])) } else { Err("this disk is not offline".into()) };
+    }
+    if s("confirm") != pool {
+        return Err("confirmation: type the pool name again".into());
+    }
+    if v.nested || status.contains("resilver in progress") {
+        return Err("a replacement or resilver is in progress on this pool: wait for it to finish".into());
+    }
+    if op == "disk_offline" {
+        if state == "OFFLINE" {
+            return Err("this disk is already offline".into());
+        }
+        // zpool itself refuses below zero ("no valid replicas"); a healthy
+        // disk is only taken offline if the vdev keeps one level of redundancy.
+        let others_down = v.leaves.iter().filter(|l| l.0 != dev && l.1 != "ONLINE").count() as i64;
+        if parity(&v) - others_down - 1 < i64::from(state == "ONLINE") {
+            return Err(format!("{}: offlining this disk would leave no redundancy, replace it instead (the old disk keeps working until the copy is done)", v.name));
+        }
+        return Ok(argv(&["zpool", "offline", pool, &dev]));
+    }
+    let new = s("new");
+    if !free.contains(&new) {
+        return Err("replacement: a free disk only".into());
+    }
+    Ok(argv(&["zpool", "replace", pool, &dev, &format!("/dev/disk/by-id/{new}")]))
 }
 
 
@@ -1942,6 +2053,59 @@ mod tests {
         for (en, fr) in FR {
             assert_eq!(en.matches("{}").count(), fr.matches("{}").count(), "{en}");
         }
+    }
+
+    fn status(rows: &str) -> String {
+        format!("  pool: tank\n state: DEGRADED\nconfig:\n\n\tNAME        STATE     READ WRITE CKSUM\n{rows}\nerrors: No known data errors\n")
+    }
+
+    #[test]
+    fn disk_replacement() {
+        let free = ["ata-NEW".to_string()];
+        let go = |st: &str, a: Value| disk_argv(a["op"].as_str().unwrap(), "tank", st, &free, &a);
+        let mirror = status("\ttank        ONLINE       0     0     0\n\t  mirror-0  ONLINE       0     0     0\n\t    ata-A   ONLINE       0     0     0\n\t    ata-B   ONLINE       0     0     0\n\tlogs\n\t  ata-L     ONLINE       0     0     0");
+        // Healthy 2-way mirror: offline would leave no redundancy (zpool allows it).
+        let e = go(&mirror, json!({"op": "disk_offline", "device": "ata-A", "confirm": "tank"})).unwrap_err();
+        assert!(e.starts_with("mirror-0: offlining"), "{e}");
+        assert_eq!(tr("fr", &e), "mirror-0 : mettre ce disque hors ligne ne laisserait aucune redondance, remplacez-le plutôt (l'ancien disque reste en service jusqu'à la fin de la copie)");
+        // Replace keeps redundancy: allowed, by-id path of a free disk only, confirmation required.
+        assert_eq!(go(&mirror, json!({"op": "disk_replace", "device": "ata-A", "new": "ata-NEW", "confirm": "tank"})).unwrap(),
+            ["zpool", "replace", "tank", "ata-A", "/dev/disk/by-id/ata-NEW"]);
+        assert!(go(&mirror, json!({"op": "disk_replace", "device": "ata-A", "new": "ata-B", "confirm": "tank"})).is_err()); // pool member
+        assert!(go(&mirror, json!({"op": "disk_replace", "device": "ata-A", "new": "../../sda", "confirm": "tank"})).is_err());
+        assert!(go(&mirror, json!({"op": "disk_replace", "device": "ata-A", "new": "ata-NEW", "confirm": "tan"})).is_err());
+        // Only data-vdev leaves: not the pool, a vdev, a log device or anything else.
+        for dev in ["tank", "mirror-0", "ata-L", "logs", "-f", ""] {
+            assert_eq!(go(&mirror, json!({"op": "disk_replace", "device": dev, "new": "ata-NEW", "confirm": "tank"})).unwrap_err(), "not a disk of this pool");
+        }
+        assert!(go(&mirror, json!({"op": "disk_online", "device": "ata-A"})).is_err()); // not offline
+        // 3-way mirror: one healthy disk may go offline.
+        let three = status("\ttank        ONLINE       0     0     0\n\t  mirror-0  ONLINE       0     0     0\n\t    ata-A   ONLINE       0     0     0\n\t    ata-B   ONLINE       0     0     0\n\t    ata-C   ONLINE       0     0     0");
+        assert_eq!(go(&three, json!({"op": "disk_offline", "device": "ata-C", "confirm": "tank"})).unwrap(), ["zpool", "offline", "tank", "ata-C"]);
+        assert!(go(&three, json!({"op": "disk_offline", "device": "ata-C"})).is_err()); // no confirmation
+        // Degraded mirror (missing disk shown by guid): the healthy one stays, the missing one is replaced.
+        let degraded = status("\ttank                  DEGRADED     0     0     0\n\t  mirror-0            DEGRADED     0     0     0\n\t    7656787387782886656  UNAVAIL      0     0     0  was /dev/disk/by-id/ata-A\n\t    ata-B             ONLINE       0     0     0");
+        assert!(go(&degraded, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
+        assert_eq!(go(&degraded, json!({"op": "disk_replace", "device": "7656787387782886656", "new": "ata-NEW", "confirm": "tank"})).unwrap()[3], "7656787387782886656");
+        // raidz1 with a disk offline: online it, never offline a second one.
+        let raidz = status("\ttank        DEGRADED     0     0     0\n\t  raidz1-0  DEGRADED     0     0     0\n\t    ata-A   OFFLINE      0     0     0\n\t    ata-B   ONLINE       0     0     0\n\t    ata-C   ONLINE       0     0     0");
+        assert_eq!(go(&raidz, json!({"op": "disk_online", "device": "ata-A"})).unwrap(), ["zpool", "online", "tank", "ata-A"]);
+        assert!(go(&raidz, json!({"op": "disk_offline", "device": "ata-A", "confirm": "tank"})).is_err()); // already
+        assert!(go(&raidz, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
+        // raidz2: one healthy disk may go; a FAULTED disk may go when one parity is left.
+        let raidz2 = status("\ttank        DEGRADED     0     0     0\n\t  raidz2-0  DEGRADED     0     0     0\n\t    ata-A   FAULTED      0     0     0  too many errors\n\t    ata-B   ONLINE       0     0     0\n\t    ata-C   ONLINE       0     0     0\n\t    ata-D   ONLINE       0     0     0");
+        assert!(go(&raidz2, json!({"op": "disk_offline", "device": "ata-A", "confirm": "tank"})).is_ok());
+        assert!(go(&raidz2, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
+        // Single-disk vdev: no redundancy at all.
+        let single = status("\ttank        ONLINE       0     0     0\n\t  ata-A     ONLINE       0     0     0\n\t  ata-B     ONLINE       0     0     0");
+        assert!(go(&single, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
+        assert!(go(&single, json!({"op": "disk_replace", "device": "ata-B", "new": "ata-NEW", "confirm": "tank"})).is_ok());
+        // Resilver in progress (real zpool 2.3 output): nothing but online until it is done.
+        let resilver = "  pool: tank\n state: ONLINE\n  scan: resilver in progress since Thu Nov  5 09:55:35 2026\n\t1.47G / 1.47G scanned, 34.4M / 1.47G issued at 34.4M/s\n\t18.4M resilvered, 2.29% done, 00:00:42 to go\nconfig:\n\n\tNAME               STATE     READ WRITE CKSUM\n\ttank               ONLINE       0     0     0\n\t  mirror-0         ONLINE       0     0     0\n\t    ata-A          ONLINE       0     0     0\n\t    replacing-1    ONLINE       0     0     0\n\t      ata-B        ONLINE       0     0     0\n\t      ata-C        ONLINE       0     0     0  (resilvering)\n\nerrors: No known data errors\n";
+        assert_eq!(go(resilver, json!({"op": "disk_replace", "device": "ata-A", "new": "ata-NEW", "confirm": "tank"})).unwrap_err(),
+            "a replacement or resilver is in progress on this pool: wait for it to finish");
+        assert!(go(resilver, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
+        assert!(go(resilver, json!({"op": "disk_offline", "device": "replacing-1", "confirm": "tank"})).is_err());
     }
 
     #[test]

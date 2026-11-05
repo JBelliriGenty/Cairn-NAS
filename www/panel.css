@@ -176,7 +176,9 @@ h3 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
 .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .7s var(--ease-smooth-out); }
 .bar.thin { height: 4px; margin-top: 8px; }
 .bar.big { height: 14px; margin: 14px 0; }
-.pools .bar i { background: var(--c-pool); }
+.pools .bar i, .bar.scan i { background: var(--c-pool); }
+.disk-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.disk-acts .pill { margin-right: auto; }
 .meter { display: grid; grid-template-columns: minmax(110px, 200px) 1fr 64px; gap: 10px; align-items: center; margin-top: 8px; font-size: 14px; }
 .meter b { text-align: right; font-variant-numeric: tabular-nums; }
 .meter.ok .bar i { background: var(--ok); }

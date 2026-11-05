@@ -302,7 +302,7 @@ function fastTick() {
 
 function slowTick() {
   const f = FEAT();
-  const manage = f.nfs || f.smb || f.users || f.pools ? get("/api/manage") : Promise.resolve("");
+  const manage = f.nfs || f.smb || f.users || f.pools || f.disks ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
     const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health, repl] = sections(out);
@@ -541,7 +541,8 @@ function renderDisks() {
   for (const root of Object.values(S.statusOf).flatMap(poolTree)) {
     for (const v of root.children) {
       groups.push({ key: root.name + "/" + v.name, title: poolName(root.name) + (v.children.length ? " · " + v.name : " · " + t("single disk")),
-        state: v.state, pool: S.pools[root.name], members: leaves(v).map(l => ({ dev: devOf(l.name), id: l.name, state: l.state, err: l.err })) });
+        state: v.state, pool: S.pools[root.name], scan: scanText(S.statusOf[root.name] || ""),
+        members: leaves(v).map(l => ({ dev: devOf(l.name), id: l.name, state: l.state, err: l.err, pool: root.name })) });
     }
   }
   const inPool = new Set(groups.flatMap(g => g.members.map(m => m.dev)));
@@ -565,6 +566,7 @@ function renderDisks() {
       stat(t("Health"), t("{ok} / {total} good", { ok: hs.filter(h => h.lvl === "ok").length, total: hs.length }), lvl) +
       stat(t("ZFS errors"), String(errs), errs ? "warn" : "") +
       (g.pool ? stat(t("Pool used"), nf(g.pool.capacity, 0) + " %", "") : "") + "</div>" +
+      (g.scan && g.scan.resilver ? scanProgress(g.scan) : "") +
       spark([r, w], 1e5, true) +
       '<details data-group="' + esc(g.key) + '"' + (openGroups.has(g.key) ? " open" : "") + "><summary>" + t("Disk by disk") + "</summary>" +
       '<div class="grid disks">' + g.members.map(diskCard).join("") + "</div></details></article>";
@@ -588,7 +590,16 @@ function diskCard(m) {
     '<span class="pill ' + hl.lvl + '">' + esc(hl.txt) + "</span></div>" +
     '<div class="sub">' + esc(S.model[d] || h?.model || "") + (h?.serial ? " · " + esc(h.serial) : "") + "</div>" +
     '<div class="rates"><span class="rx">' + t("read {rate}/s", { rate: bytes(last(hi.r)) }) + '</span><span class="tx">' + t("write {rate}/s", { rate: bytes(last(hi.w)) }) + "</span></div>" +
-    spark([hi.r, hi.w], 1e5) + '<dl class="kv">' + kv.map(([k, v, c]) => "<dt>" + k + '</dt><dd class="' + c + '">' + esc(v) + "</dd>").join("") + "</dl></article>";
+    spark([hi.r, hi.w], 1e5) + '<dl class="kv">' + kv.map(([k, v, c]) => "<dt>" + k + '</dt><dd class="' + c + '">' + esc(v) + "</dd>").join("") + "</dl>" +
+    diskActions(m) + "</article>";
+}
+// Offline / online / replace a pool member (features.disks); the server checks redundancy again.
+function diskActions(m) {
+  if (!FEAT().disks || !m.pool) return "";
+  const b = (act, label) => '<button data-act="' + act + '" data-pool="' + esc(m.pool) + '" data-dev="' + esc(m.id) + '">' + label + "</button>";
+  return '<div class="disk-acts"><span class="pill ' + (m.state === "ONLINE" ? "ok" : m.state === "OFFLINE" ? "warn" : "bad") + '">' + esc(m.state) + "</span>" +
+    (m.state === "OFFLINE" ? b("disk-online", t("Bring online")) : ["ONLINE", "DEGRADED", "FAULTED"].includes(m.state) ? b("disk-offline", t("Take offline")) : "") +
+    b("disk-replace", t("Replace")) + "</div>";
 }
 
 /* storage */
@@ -597,7 +608,15 @@ const poolName = n => UI.labels["pool:" + n] || n;
 
 function scanText(status) {
   const scan = (status.match(/^\s*scan: ([\s\S]*?)\nconfig:/m) || [, t("no scrub yet")])[1].replace(/\n\s+/g, " ").trim();
-  return { text: scan, running: /in progress/.test(scan) };
+  const pct = scan.match(/([\d.]+)% done/), eta = scan.match(/done, (\S+) to go/);
+  return { text: scan, running: /in progress/.test(scan), resilver: /^resilver in progress/.test(scan), pct: pct ? Number(pct[1]) : null, eta: eta ? eta[1] : "" };
+}
+// Progress of a running scrub or resilver (zpool status: "12.3% done, 01:02:03 to go"); the slow loop refreshes it.
+function scanProgress(scan) {
+  if (!scan.running || scan.pct == null) return "";
+  const what = scan.resilver ? t("Resilver") : t("Scrub");
+  return '<div class="bar thin scan"><i data-w="' + scan.pct + '"></i></div><p class="sub">' +
+    (scan.eta ? t("{what}: {pct} % done, {eta} left", { what, pct: nf(scan.pct, 1), eta: esc(scan.eta) }) : t("{what}: {pct} % done", { what, pct: nf(scan.pct, 1) })) + "</p>";
 }
 
 function renderStorage() {
@@ -613,9 +632,9 @@ function renderStorage() {
     '<div class="bar big"><i data-w="' + p.capacity + '"></i></div>' +
     '<div class="stats">' + stat(t("Allocated"), bytes(p.allocated), "") + stat(t("Free"), bytes(p.free), "") + stat(t("Raw size"), bytes(p.size), "") +
     stat(t("Fragmentation"), p.fragmentation + " %", "") + (errors.startsWith("No known") ? stat(t("Errors"), t("None"), "ok") : stat(t("Errors"), errors, "bad")) + "</div>" +
-    '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" +
-    '<button data-act="scrub" data-pool="' + esc(p.name) + '" data-running="' + scan.running + '" class="' + (scan.running ? "danger" : "primary") + '">' +
-    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button></article>";
+    '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" + scanProgress(scan) +
+    (scan.resilver ? "" : '<button data-act="scrub" data-pool="' + esc(p.name) + '" data-running="' + scan.running + '" class="' + (scan.running ? "danger" : "primary") + '">' +
+    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") + "</article>";
   }).join("");
 
   const rows = byTag(S.datasets, r => "ds:" + r[0]);
@@ -929,6 +948,27 @@ async function poolForm() {
   if (fd) mg({ op: "pool_create", name: fd.get("name"), layout: fd.get("layout"), disks: fd.getAll("d"), confirm: fd.get("confirm") }, t("Pool {name} created", { name: fd.get("name") }));
 }
 
+// Disk replacement (features.disks): offline and replace need the pool name retyped.
+const confirmPool = pool => "<label>" + t("Confirmation: retype the pool name") + '<input name="confirm" required autocomplete="off"></label>';
+async function diskOffline(pool, dev) {
+  const fd = await ask(t("Take {dev} offline?", { dev }), "<p>" + t("ZFS stops using this disk; <b>{pool}</b> keeps running on the others, with less redundancy, until the disk is brought back online or replaced.", { pool: esc(pool) }) + "</p>" +
+    '<p class="sub">' + t("Refused when the disk group would be left without redundancy: replace the disk instead, the old one keeps working until the copy is done.") + "</p>" + confirmPool(pool), t("Take offline"), true);
+  if (fd) mg({ op: "disk_offline", pool, device: dev, confirm: fd.get("confirm") }, t("{dev} is offline", { dev }));
+}
+async function diskReplace(pool, dev) {
+  const disks = M.free_disks;
+  if (!disks.length) {
+    await ask(t("Replace {dev} in {pool}", { dev, pool }), "<p>" + t("No free disk: every disk already has partitions or data, or belongs to a pool.") + "</p>" +
+      '<p class="sub">' + t("Plug in the new disk: it appears here once it is blank (no partition, no signature).") + "</p>", t("Close"));
+    return;
+  }
+  const fd = await ask(t("Replace {dev} in {pool}", { dev, pool }),
+    '<p class="sub">' + t("ZFS copies the data onto the new disk (resilver), then detaches the old one. <b>The chosen disk will be completely erased.</b> It must be at least as large as the old one.") + "</p>" +
+    '<fieldset class="swatches"><legend>' + t("New disk") + "</legend>" + disks.map((d, i) => '<label class="swatch"><input type="radio" name="new" required value="' + esc(d.id) + '"' + (i ? "" : " checked") + ">" +
+      esc(d.dev) + " · " + bytes(d.size) + " · " + esc(d.model) + "</label>").join("") + "</fieldset>" + confirmPool(pool), t("Replace"), true);
+  if (fd) mg({ op: "disk_replace", pool, device: dev, new: fd.get("new"), confirm: fd.get("confirm") }, t("Resilver started on {pool}", { pool }));
+}
+
 /* ---------- actions (validated again server-side) ---------- */
 
 const act = (payload, okMsg) => once(async () => {
@@ -1043,6 +1083,9 @@ document.addEventListener("click", e => {
     case "group-del": return deleteAccount("group_delete", d.name);
     case "ds-new": return datasetForm();
     case "pool-new": return poolForm();
+    case "disk-offline": return diskOffline(d.pool, d.dev);
+    case "disk-online": return mg({ op: "disk_online", pool: d.pool, device: d.dev }, t("{dev} is back online", { dev: d.dev }));
+    case "disk-replace": return diskReplace(d.pool, d.dev);
     case "bonjour": return mg({ op: "bonjour", on: d.on === "1" }, d.on === "1" ? t("Bonjour announcement on") : t("Bonjour announcement off"));
   }
 });

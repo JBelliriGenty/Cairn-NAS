@@ -46,7 +46,25 @@ Demo data.
 - **Dashboards**: read-only JSON summary for Homepage and the like.
 
 Optional (off by default): creating datasets and pools on blank disks
-(`features.pools`).
+(`features.pools`); replacing a pool's disks (`features.disks`), see below.
+
+## Disk replacement (`features.disks`)
+
+In **Disks**, each pool member gets *Take offline*, *Bring online* and
+*Replace*. Replace runs `zpool replace` with a free disk (blank: no
+partition, holder or signature, same rule as pool creation), named by its
+`/dev/disk/by-id` path; the old disk stays in use until the resilver is done,
+and its progress and time left show in **Storage** and **Disks**, refreshed
+every 15 s. Offline and replace ask for the pool name to be typed again.
+
+The server refuses:
+- any action while a resilver or replacement runs in the pool (except
+  *Bring online*);
+- taking a healthy disk offline when its vdev would be left without
+  redundancy (one disk of a two-way mirror, a second disk of a RAIDZ1…),
+  which `zpool` itself allows: replace it instead, redundancy is kept during
+  the copy. `zpool` refuses on its own to offline the last valid copy;
+- log, cache and spare devices, and anything that is not a leaf of a data vdev.
 
 ## Try it
 
@@ -94,7 +112,7 @@ with your own if you have one.
 | `tls` | `{cert, key}` (PEM): HTTPS, required with `login` |
 | `trusted_proxies`, `user_header`, `groups_header`, `require_groups` | proxy mode |
 | `services` | systemd units shown and restartable |
-| `features` | `{nfs, smb, users, pools}`: allowed writes |
+| `features` | `{nfs, smb, users, pools, disks}`: allowed writes |
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
 | `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in Storage with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |
