@@ -14,7 +14,7 @@ const COMPRESSION = ["lz4", "zstd", "zstd-fast", "gzip", "off"];
 const PALETTE = [["#16181d", "Black"], ["#e5484d", "Red"], ["#f76b15", "Orange"], ["#f5c518", "Yellow"],
   ["#30a46c", "Green"], ["#0090ff", "Blue"], ["#8e4ec6", "Purple"], ["#e93d82", "Pink"], ["#8b8d98", "Grey"]];
 const VIEWS = { overview: "Overview", systeme: "System", reseau: "Network", disques: "Disks",
-  stockage: "Storage", partages: "Shares", comptes: "Accounts", services: "Services" };
+  stockage: "Storage", sauvegarde: "Backup", partages: "Shares", comptes: "Accounts", services: "Services" };
 
 let CFG = { nics: [], hosts: {}, services: [] };
 let UI = { labels: {}, tags: {}, assign: {} };
@@ -344,7 +344,7 @@ function render(force = false) {
   if (!force && Date.now() < animUntil) return; // let the entrance animation finish
   const f = document.activeElement, sig = e => e.tagName + JSON.stringify(e.dataset) + e.textContent;
   const was = f && f !== document.body && f.closest("main") ? sig(f) : null;
-  renderChrome(); renderOverview(); renderSystem(); renderNet(); renderDisks(); renderStorage(); renderNfs(); renderShares(); renderAccounts(); renderServices(); renderAlerts(); renderJournal();
+  renderChrome(); renderOverview(); renderSystem(); renderNet(); renderDisks(); renderStorage(); renderBackup(); renderNfs(); renderShares(); renderAccounts(); renderServices(); renderAlerts(); renderJournal();
   paint();
   if (was && !f.isConnected) [...document.querySelectorAll("main button, main summary")].find(e => sig(e) === was)?.focus({ preventScroll: true });
 }
@@ -411,6 +411,8 @@ function renderOverview() {
   const down = S.services.filter(([, st]) => st !== "active");
   const clients = new Set(S.exports.flatMap(l => l.trim().split(/\s+/).slice(1).map(c => c.replace(/\(.*$/, ""))));
   const conn = [...clients].filter(ip => S.connected.has(ip)).length;
+  const lateRepl = S.replication.filter(([, last, age, max]) => last === "-" || Number(age) > Number(max));
+  const oldest = Math.max(0, ...S.replication.filter(r => r[1] !== "-").map(r => Number(r[2])));
 
   // The screen's question first: is the NAS fine? Name what is not, else sum up what is.
   const issues = [
@@ -418,8 +420,9 @@ function renderOverview() {
     ...pools.filter(x => x.capacity >= 80).map(x => t("pool {name} {pct} % full", { name: poolName(x.name), pct: nf(x.capacity, 0) })),
     ...disks.filter((d, i) => hs[i].lvl === "bad" || hs[i].lvl === "warn").map(d => t("disk {name} {health}", { name: UI.labels["disk:" + d] || d, health: healthOf(S.health[d]).txt })),
     ...down.map(([n]) => t("service {name} stopped", { name: n })),
+    ...lateRepl.map(([ds]) => t("replication of {name} late", { name: UI.labels["ds:" + ds] || ds })),
   ];
-  const vl = worst([...pools.map(x => (x.health === "ONLINE" ? (x.capacity >= 80 ? "warn" : "ok") : "bad")), ...hs.map(h => h.lvl), down.length ? "warn" : "ok"]);
+  const vl = worst([...pools.map(x => (x.health === "ONLINE" ? (x.capacity >= 80 ? "warn" : "ok") : "bad")), ...hs.map(h => h.lvl), down.length ? "warn" : "ok", lateRepl.length ? "bad" : "ok"]);
   $("verdict").className = "verdict " + vl;
   $("verdict").innerHTML = '<span class="dot ' + vl + '"></span>' + esc(issues.length ? issues.join(" · ") :
     t("All good: {pools}, {good} / {disks}, {services}", { pools: tp(pools.length, "{n} pool online", "{n} pools online"), good,
@@ -436,6 +439,9 @@ function renderOverview() {
     tile("services", t("Services"), t("{up} / {total} active", { up: S.services.length - down.length, total: S.services.length }), down.length ? "warn" : "ok",
       '<div class="svcdots">' + S.services.map(([n, st]) => '<span class="dot ' + (st === "active" ? "ok" : "bad") + '" title="' + esc(t("{name}: {value}", { name: n, value: st })) + '"></span>').join("") + "</div>" +
       (down.length ? '<p class="sub">' + t("Stopped: {list}", { list: down.map(([n]) => esc(n)).join(", ") }) + "</p>" : "")),
+    S.replication.length ? tile("sauvegarde", t("Replication"), t("{ok} / {total} up to date", { ok: S.replication.length - lateRepl.length, total: S.replication.length }),
+      lateRepl.length ? "bad" : "ok", '<p class="sub">' + (lateRepl.length ? t("Late: {list}", { list: lateRepl.map(([ds]) => esc(ds)).join(", ") })
+        : t("Oldest last snapshot: {age}", { age: duration(oldest) })) + "</p>") : "",
   ].join("");
   // Secondary facts: one line of links instead of half-empty tiles.
   $("facts").innerHTML = [
@@ -672,10 +678,15 @@ function renderStorage() {
           '</td><td class="actions"><button class="danger" data-act="snap-del-many" data-snap="' + esc(snap) + '">' + t("Delete all {n}", { n: list.length }) + "</button></td></tr>").join("") +
       Object.entries(auto).map(([label, a]) => '<tr class="auto"><td>zfs-auto-snap · ' + esc(label) + " — " + tp(a.n, "{n} snapshot", "{n} snapshots") + "</td><td>" + bytes(a.used) +
         "</td><td>" + t("last {when}", { when: when(a.last) }) + '</td><td class="sub">' + t("automatic rotation") + "</td></tr>").join("") + "</tbody>";
+}
 
-  // Replication: the newest snapshot of each replicated dataset, late past its max age.
-  $("repl-title").hidden = $("repl-card").hidden = !S.replication.length;
-  $("repl").innerHTML = "<thead><tr>" + ["Dataset", "Last snapshot", "Age", "State"].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
+// Replication: the newest snapshot of each replicated dataset, late past its max age.
+function renderBackup() {
+  document.querySelector('#nav [data-view="sauvegarde"]').hidden = !S.replication.length;
+  const when = t => new Date(t * 1000).toLocaleString(LOCALE());
+  $("repl").innerHTML = !S.replication.length
+    ? '<tbody><tr><td class="sub">' + t("No replication configured: list the replicated datasets under <code>replication</code> in the panel configuration.") + "</td></tr></tbody>"
+    : "<thead><tr>" + ["Dataset", "Last snapshot", "Age", "State"].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
     S.replication.map(([ds, last, age, max]) => {
       const never = last === "-", late = never || Number(age) > Number(max);
       return "<tr><td>" + dot("ds:" + ds) + "<b>" + esc(UI.labels["ds:" + ds] || ds) + "</b></td><td>" + (never ? "—" : when(Number(last))) +

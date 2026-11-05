@@ -115,7 +115,7 @@ with your own if you have one.
 | `features` | `{nfs, smb, users, pools, disks}`: allowed writes |
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
-| `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in Storage with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |
+| `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in the Backup view (and an Overview tile) with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |
 | `recycle_days` | how long the SMB recycle bin keeps files (30) |
 | `lang` | `en` or `fr`: alerts, `/api/summary`, and the page's default when the browser asks for neither (`en`) |
 | `nics`, `hosts` | display names of network interfaces and client machines |
