@@ -398,6 +398,11 @@ const DICT = {
     "Repository {name} removed": "Dépôt {name} retiré", "Stop the backup of {name}": "Arrêter la sauvegarde de {name}",
     "No more copies are made; those already in the repository stay there.": "Plus aucune copie n'est faite ; celles déjà dans le dépôt y restent.",
     "Backup of {name} stopped": "Sauvegarde de {name} arrêtée", "Backup of {name} started": "Sauvegarde de {name} lancée",
+    // machines (other Cairn instances)
+    "Machines": "Machines", "{ok} / {total} OK": "{ok} / {total} OK", "unreachable": "injoignable", "not checked yet": "pas encore interrogée",
+    "{n} problem": "{n} problème", "{n} problems": "{n} problèmes", "no problem": "aucun problème",
+    "Unreachable since {time} ({d})": "Injoignable depuis le {time} ({d})", "Not checked yet.": "Pas encore interrogée.",
+    "this machine": "cette machine", "Open": "Ouvrir", "Last known state:": "Dernier état connu :", "Problems": "Problèmes",
   },
 };
 

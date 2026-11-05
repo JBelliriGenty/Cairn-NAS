@@ -14,12 +14,12 @@ const COMPRESSION = ["lz4", "zstd", "zstd-fast", "gzip", "off"];
 const PALETTE = [["#16181d", "Black"], ["#e5484d", "Red"], ["#f76b15", "Orange"], ["#f5c518", "Yellow"],
   ["#30a46c", "Green"], ["#0090ff", "Blue"], ["#8e4ec6", "Purple"], ["#e93d82", "Pink"], ["#8b8d98", "Grey"]];
 const VIEWS = { overview: "Overview", systeme: "System", reseau: "Network", disques: "Disks",
-  stockage: "Storage", sauvegarde: "Backup", partages: "Shares", comptes: "Accounts", services: "Services" };
+  stockage: "Storage", sauvegarde: "Backup", machines: "Machines", partages: "Shares", comptes: "Accounts", services: "Services" };
 
 let CFG = { nics: [], hosts: {}, services: [] };
 let UI = { labels: {}, tags: {}, assign: {} };
 const hist = { cpu: [], net: {}, disk: {} };
-let prev = null, F = null, S = null, animUntil = 0, VIEW = null;
+let prev = null, F = null, S = null, P = null, animUntil = 0, VIEW = null;
 const openGroups = new Set();
 
 /* ---------- helpers ---------- */
@@ -302,6 +302,8 @@ function fastTick() {
 
 function slowTick() {
   const f = FEAT();
+  // Separate: the server answers from memory, but a failure here must not hide the rest.
+  if (f.peers) get("/api/peers").then(x => { P = JSON.parse(x); render(true); }).catch(() => { P = null; });
   const manage = f.nfs || f.smb || f.users || f.pools || f.vdevs || f.disks || f.replication || f.iscsi || f.schedules || f.encryption || f.offsite ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
@@ -345,7 +347,7 @@ function render(force = false) {
   if (!force && Date.now() < animUntil) return; // let the entrance animation finish
   const f = document.activeElement, sig = e => e.tagName + JSON.stringify(e.dataset) + e.textContent;
   const was = f && f !== document.body && f.closest("main") ? sig(f) : null;
-  renderChrome(); renderOverview(); renderSystem(); renderNet(); renderDisks(); renderStorage(); renderBackup(); renderNfs(); renderShares(); renderAccounts(); renderServices(); renderAlerts(); renderJournal();
+  renderChrome(); renderOverview(); renderSystem(); renderNet(); renderDisks(); renderStorage(); renderBackup(); renderMachines(); renderNfs(); renderShares(); renderAccounts(); renderServices(); renderAlerts(); renderJournal();
   paint();
   if (was && !f.isConnected) [...document.querySelectorAll("main button, main summary")].find(e => sig(e) === was)?.focus({ preventScroll: true });
 }
@@ -440,6 +442,8 @@ function renderOverview() {
     tile("services", t("Services"), t("{up} / {total} active", { up: S.services.length - down.length, total: S.services.length }), down.length ? "warn" : "ok",
       '<div class="svcdots">' + S.services.map(([n, st]) => '<span class="dot ' + (st === "active" ? "ok" : "bad") + '" title="' + esc(t("{name}: {value}", { name: n, value: st })) + '"></span>').join("") + "</div>" +
       (down.length ? '<p class="sub">' + t("Stopped: {list}", { list: down.map(([n]) => esc(n)).join(", ") }) + "</p>" : "")),
+    P ? tile("machines", t("Machines"), t("{ok} / {total} OK", { ok: P.filter(m => machineLvl(m) === "ok").length, total: P.length }), worst(P.map(machineLvl)),
+      '<div class="svcdots">' + P.map(m => '<span class="dot ' + machineLvl(m) + '" title="' + esc(t("{name}: {value}", { name: m.name, value: machineState(m) })) + '"></span>').join("") + "</div>") : "",
     S.replication.length ? tile("sauvegarde", t("Replication"), t("{ok} / {total} up to date", { ok: S.replication.length - lateRepl.length, total: S.replication.length }),
       lateRepl.length ? "bad" : "ok", '<p class="sub">' + (lateRepl.length ? t("Late: {list}", { list: lateRepl.map(([ds]) => esc(ds)).join(", ") })
         : t("Oldest last snapshot: {age}", { age: duration(oldest) })) + "</p>") : "",
@@ -768,6 +772,36 @@ function renderBackup() {
         "</td><td>" + (never ? "—" : duration(Number(age))) + '</td><td><span class="pill ' + (late ? "bad" : "ok") + '">' +
         (never ? t("never") : late ? t("late (over {h} h)", { h: Number(max) / 3600 }) : t("up to date")) + "</span></td></tr>";
     }).join("") + "</tbody>";
+}
+
+/* machines: this one and the other Cairn instances (read-only, /api/peers) */
+
+function machineLvl(m) {
+  if (!m.ok) return "bad";
+  const pools = Object.values((m.summary || {}).pools || {});
+  if (pools.some(p => p.health !== "ONLINE")) return "bad";
+  return m.summary.problems > 0 || pools.some(p => p.capacity >= 80) ? "warn" : "ok";
+}
+function machineState(m) {
+  if (!m.ok) return m.checked ? t("unreachable") : t("not checked yet");
+  return m.summary.problems ? tp(m.summary.problems, "{n} problem", "{n} problems") : t("no problem");
+}
+function renderMachines() {
+  document.querySelector('#nav [data-view="machines"]').hidden = !FEAT().peers;
+  if (!P) return void ($("machines").innerHTML = FEAT().peers ? '<p class="sub">' + t("Loading…") + "</p>" : "");
+  $("machines").innerHTML = P.map(m => {
+    const s = m.summary, lvl = machineLvl(m);
+    const down = !m.ok ? '<p class="sub">' + (m.checked ? t("Unreachable since {time} ({d})", { time: new Date(Date.now() - m.down_s * 1000).toLocaleString(LOCALE()), d: duration(m.down_s) }) +
+      (m.error ? '<br><small class="sys">' + esc(m.error) + "</small>" : "") : t("Not checked yet.")) + "</p>" : "";
+    return '<article class="card"><div class="card-head"><span class="row"><span class="dot ' + lvl + '"></span><b>' + esc(m.name) + "</b></span>" +
+      (m.self ? '<span class="pill">' + t("this machine") + "</span>" : '<a class="btn" href="' + esc(m.link) + '" target="_blank" rel="noopener noreferrer">' + t("Open") + "</a>") + "</div>" +
+      down + (s ? (m.ok ? "" : '<p class="sub">' + t("Last known state:") + "</p>") +
+        Object.entries(s.pools).map(([n, p]) => '<div class="meter ' + (p.health !== "ONLINE" ? "bad" : p.capacity >= 80 ? "warn" : "ok") + '"><span>' + esc(n) + " · " + esc(p.health) +
+          '</span><div class="bar"><i data-w="' + p.capacity + '"></i></div><b>' + nf(p.capacity, 0) + " %</b></div>").join("") +
+        '<div class="stats">' + stat(t("Problems"), String(s.problems), s.problems ? "warn" : "ok") +
+        (s.temp_max_c != null ? stat(t("Max temperature"), nf(s.temp_max_c, 0) + " °C", lvlTemp(s.temp_max_c)) : "") + "</div>" +
+        (s.messages.length ? '<ul class="msgs">' + s.messages.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "") : "") + "</article>";
+  }).join("");
 }
 
 /* off-site backup with restic (features.offsite) */

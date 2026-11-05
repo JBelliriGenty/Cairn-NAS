@@ -29,6 +29,7 @@ mod restore;
 mod schedules;
 mod encryption;
 mod offsite;
+mod peers;
 
 const INDEX: &str = include_str!("../www/index.html");
 const JS: &str = include_str!("../www/panel.js");
@@ -62,6 +63,8 @@ struct Config {
     summary_token: Option<String>, // bearer token for /api/summary only
     lang: String, // alerts, /api/summary, and the page when the browser asks for no known language
     replication: Vec<Replica>,
+    peers: Vec<peers::Peer>, // other Cairn instances shown in Machines
+    peer_unreachable_s: u64, // alert when a peer stays unreachable this long
     iscsi_base: String, // target names: <iscsi_base>:<volume>
     path: String, // this config file, for the cairn-repl service
     public: Value,      // what /api/config returns (labels, title…)
@@ -128,6 +131,8 @@ impl Config {
         });
         public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "vdevs": features.vdevs, "disks": features.disks, "replication": features.replication, "iscsi": features.iscsi, "restore": features.restore, "schedules": features.schedules, "encryption": features.encryption, "offsite": features.offsite,
             "firewall": firewall_table.is_some(), "login": login.is_some(), "autosnap": std::path::Path::new("/usr/sbin/zfs-auto-snapshot").exists()});
+        let peers = peers::load(&v);
+        public["features"]["peers"] = json!(!peers.is_empty());
         Config {
             listen: s("listen", "127.0.0.1:9091"),
             trusted_proxies: strings(&v, "trusted_proxies"),
@@ -159,6 +164,8 @@ impl Config {
                 assert!(t.len() >= 32, "summary_token_file: token shorter than 32 characters");
                 t
             }),
+            peers,
+            peer_unreachable_s: v["peer_unreachable_minutes"].as_u64().unwrap_or(15).max(1) * 60,
             iscsi_base: v["iscsi_base"].as_str().map(String::from)
                 .unwrap_or_else(|| format!("iqn.2003-01.org.linux-iscsi.{}", iqn_part(read("/proc/sys/kernel/hostname").trim()))),
             path: path.to_string(),
@@ -523,7 +530,7 @@ fn tr(lang: &str, msg: &str) -> String {
         return msg.to_string();
     }
     // specific module messages first: FR has catch-alls such as "Pool {}: {}"
-    restore::FR.iter().chain(schedules::FR).chain(encryption::FR).chain(offsite::FR).chain(FR).find_map(|(en, fr)| fill(en, msg).map(|caps| {
+    peers::FR.iter().chain(restore::FR).chain(schedules::FR).chain(encryption::FR).chain(offsite::FR).chain(FR).find_map(|(en, fr)| fill(en, msg).map(|caps| {
         let mut out = String::new();
         for (i, part) in fr.split("{}").enumerate() {
             if i > 0 {
@@ -667,7 +674,8 @@ fn alert_loop(cfg: &'static Config) {
     let Some(a) = &cfg.alerts else { return };
     let mut sent: BTreeMap<String, String> = serde_json::from_str(&read(&cfg.alerts_file)).unwrap_or_default();
     loop {
-        let now = problems(cfg, a.capacity_pct);
+        let mut now = problems(cfg, a.capacity_pct);
+        peers::problems(cfg, &mut now); // this machine's view of its peers, not part of its own summary
         for (k, m) in &now {
             if !sent.contains_key(k) && notify(cfg, a, "alert", m, "high", "warning").is_ok() {
                 sent.insert(k.clone(), m.clone());
@@ -2402,6 +2410,7 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Get, "/api/fast") => respond(r, 200, fast(), "text/plain"),
         (Method::Get, "/api/summary") => respond(r, 200, summary(cfg).to_string(), "application/json"),
         (Method::Get, "/api/slow") => respond(r, 200, slow(cfg), "text/plain"),
+        (Method::Get, "/api/peers") if !cfg.peers.is_empty() => respond(r, 200, peers::view(cfg).to_string(), "application/json"),
         (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg, lang).to_string(), "application/json"),
         // On demand only: zpool import reads the label of every disk.
         (Method::Get, "/api/importable") if cfg.features.pools => respond(r, 200, json!(parse_importable(&cmd(&["zpool", "import"]))).to_string(), "application/json"),
@@ -2507,6 +2516,7 @@ fn demo(mut r: Request) {
         }
         (Method::Get, "/api/slow") => respond(r, 200, include_str!("../demo/slow.txt").into(), "text/plain"),
         (Method::Get, "/api/manage") => respond(r, 200, include_str!("../demo/manage.json").into(), jsn),
+        (Method::Get, "/api/peers") => respond(r, 200, include_str!("../demo/peers.json").into(), jsn),
         (Method::Get, "/api/importable") => respond(r, 200, json!(parse_importable(include_str!("../demo/import.txt"))).to_string(), jsn),
         (Method::Get, "/api/browse" | "/api/download") => restore::demo_serve(r, &path),
         (Method::Get, "/api/backups") => offsite::demo_serve(r),
@@ -2562,6 +2572,9 @@ fn main() {
     eprintln!("cairn-nas listening on {}", cfg.listen);
     std::thread::spawn(move || alert_loop(cfg));
     std::thread::spawn(move || housekeeping(cfg));
+    if !cfg.peers.is_empty() {
+        std::thread::spawn(move || peers::poll_loop(cfg));
+    }
     for r in server.incoming_requests() {
         std::thread::spawn(move || handle(cfg, r));
     }

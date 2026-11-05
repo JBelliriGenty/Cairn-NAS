@@ -256,6 +256,28 @@ of its own is created). The backup side keeps 4 quarter-hourly, 24 hourly,
 are never pruned. Each copy shows in the Backup table and alerts after 26 h
 without a new snapshot. *Stop* and *Revoke* never delete data.
 
+## Machines (`peers`)
+
+One Cairn can show the others at a glance, read-only. List them under
+`peers`; a **Machines** view appears (and an Overview tile): one card per
+machine, this one first, with its pools (health, % used), problem count and
+messages, highest temperature, and an *Open* link to its own page.
+
+```json
+"peers": [{"name": "Backup", "url": "http://192.0.2.20:9091", "link": "https://backup.example.lan",
+           "token_file": "/etc/cairn-nas-peer-backup-token"}]
+```
+
+The server (never the browser) fetches each peer's `GET /api/summary` every
+30 s, in the background, with that peer's summary token (`summary_token_file`
+on the peer; a root-only file here, sent to curl on stdin, never to the
+page): a dead peer never slows the page. `url` is where this server reaches
+the peer (it must be allowed to: the peer's firewall, and its
+`trusted_proxies` do not matter since the token is enough); `link` is what the
+browser opens, e.g. behind a reverse proxy. A peer unreachable for longer than
+`peer_unreachable_minutes` (15) is alerted; its own problems are not, each
+machine alerts on its own. The token opens nothing but `/api/summary`.
+
 ## Try it
 
 `cairn-nas --demo` serves the page on sample data at `http://127.0.0.1:8080`
@@ -309,6 +331,8 @@ with your own if you have one.
 | `recycle_days` | how long the SMB recycle bin keeps files (30) |
 | `lang` | `en` or `fr`: alerts, `/api/summary`, and the page's default when the browser asks for neither (`en`) |
 | `nics`, `hosts` | display names of network interfaces and client machines |
+| `peers` | list of `{name, url, link, token_file}`: other Cairn instances shown in Machines (see below) |
+| `peer_unreachable_minutes` | alert when a peer stays unreachable this long (15) |
 | `summary_token_file` | file holding the token (32 characters min.) that opens `GET /api/summary` to dashboards |
 
 ## Dashboards (Homepage…)

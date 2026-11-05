@@ -391,3 +391,4 @@ a.btn { display: inline-block; padding: 6px 12px; border-radius: 6px; border: 1p
 a.btn:hover { border-color: var(--muted); }
 td.actions a.btn + button { margin-left: 6px; }
 .card > button + p.sub { margin-top: 8px; }
+.msgs { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }

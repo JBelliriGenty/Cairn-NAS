@@ -1,0 +1,5 @@
+[
+  {"name": "NAS", "self": true, "ok": true, "summary": {"pools": {"fast": {"health": "ONLINE", "capacity": 9, "size": 3985729650688, "alloc": 358715668561}, "tank": {"health": "ONLINE", "capacity": 41, "size": 9998683865088, "alloc": 4099460384686}}, "problems": 0, "messages": [], "temp_max_c": 54}},
+  {"name": "Backup", "link": "https://backup.example.lan", "ok": true, "error": "", "checked": true, "down_s": null, "summary": {"pools": {"backup": {"health": "DEGRADED", "capacity": 87, "size": 11991548690432, "alloc": 10432647360675}}, "problems": 2, "messages": ["Pool backup: DEGRADED", "Pool backup is 87% full (threshold 85%)"], "temp_max_c": 47}},
+  {"name": "Off-site", "link": "https://offsite.example.net", "ok": false, "error": "(28) Connection timed out after 8002 milliseconds", "checked": true, "down_s": 4380, "summary": {"pools": {"vault": {"health": "ONLINE", "capacity": 63, "size": 7999987161088, "alloc": 5039991911485}}, "problems": 0, "messages": [], "temp_max_c": 39}}
+]

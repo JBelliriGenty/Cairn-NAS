@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Machines view (`peers`): the other Cairn instances at a glance (pools, problems, temperature, reachability, link to their page), read server-side from their `/api/summary` with their token, every 30 s in the background; alert when one stays unreachable past `peer_unreachable_minutes` (15).
 - ZFS volumes (zvols) in Storage: list (size, used, ratio, block size), create (thin or reserved, block size, compression) and grow, with `features.pools`.
 - Deletion of datasets, volumes and pools from Storage (`features.pools`): full name retyped, refused while a share, an `/etc/exports` path or a replication uses it, children only when asked, never a pool root, never forced; snapshots go with it.
 - iSCSI export of volumes (`features.iscsi`, LIO through `targetcli`): one target per volume, access only for the listed initiators, restored at boot after the ZFS volumes; an exported volume cannot be deleted.
