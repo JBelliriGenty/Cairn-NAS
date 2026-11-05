@@ -302,7 +302,7 @@ function fastTick() {
 
 function slowTick() {
   const f = FEAT();
-  const manage = f.nfs || f.smb || f.users || f.pools || f.vdevs || f.disks || f.replication || f.iscsi ? get("/api/manage") : Promise.resolve("");
+  const manage = f.nfs || f.smb || f.users || f.pools || f.vdevs || f.disks || f.replication || f.iscsi || f.schedules || f.encryption || f.offsite ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
     const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health, repl] = sections(out);
@@ -352,7 +352,7 @@ function render(force = false) {
 
 function healthOf(h) {
   if (!h) return { lvl: "unk", txt: t("unknown") };
-  if (h.passed === false || h.critical > 0 || h.media_errors > 0 || (h.spare != null && h.spare_thr != null && h.spare <= h.spare_thr))
+  if (h.passed === false || h.critical > 0 || h.media_errors > 0 || (h.spare != null && h.spare_thr != null && h.spare <= h.spare_thr) || (h.selftest && h.selftest.passed === false))
     return { lvl: "bad", txt: t("critical") };
   if (h.used >= 80 || h.temp >= 70 || (h.spare != null && h.spare < 20) || h.realloc > 0) return { lvl: "warn", txt: t("needs attention") };
   return { lvl: "ok", txt: t("good") };
@@ -568,7 +568,7 @@ function renderDisks() {
   const other = Object.keys(S.model).filter(d => !inPool.has(d)).sort();
   if (other.length) groups.push({ key: "other", title: t("Not in a pool"), state: "", members: other.map(d => ({ dev: d, id: d, state: "", err: [0, 0, 0] })) });
 
-  $("groups").innerHTML = groups.map(g => {
+  $("groups").innerHTML = smartCard() + groups.map(g => {
     const devs = g.members.map(m => m.dev);
     const r = sumSeries(devs.map(d => (hist.disk[d] || {}).r || [])), w = sumSeries(devs.map(d => (hist.disk[d] || {}).w || []));
     const temps = devs.map(d => S.health[d]?.temp ?? F.nvmeT[d]).filter(x => x != null);
@@ -608,6 +608,7 @@ function diskCard(m) {
     [t("Power-on hours"), h?.hours != null ? String(h.hours) : "—", ""], [t("Written"), h?.written != null ? bytes(h.written * 512000) : "—", ""],
     [t("Unsafe shutdowns"), h?.unsafe != null ? String(h.unsafe) : "—", ""], [t("Media errors"), h?.media_errors != null ? String(h.media_errors) : "—", h?.media_errors ? "bad" : ""],
     [t("ZFS errors R/W/C"), m.err.join(" / "), m.err.some(x => x) ? "warn" : ""],
+    [t("Last self-test"), h?.selftest ? h.selftest.status + (h.selftest.hours != null ? " · " + t("{h} h", { h: h.selftest.hours }) : "") : "—", h?.selftest?.passed === false ? "bad" : ""],
   ];
   return '<article class="card disk' + (tagOf(key) ? " tagged" : "") + '"' + tagAttr(key) + '><div class="row">' + nameBlock(key, d, d) +
     '<span class="pill ' + hl.lvl + '">' + esc(hl.txt) + "</span></div>" +
@@ -671,7 +672,7 @@ function scanProgress(scan) {
 function renderStorage() {
   $("storage-actions").innerHTML = FEAT().pools
     ? '<button class="primary" data-act="ds-new">' + t("New dataset") + '</button><button data-act="zvol-new">' + t("New volume") + '</button><button data-act="pool-new">' + t("New pool") + "</button>" +
-      '<button data-act="pool-import">' + t("Import a pool") + "</button>" : "";
+      '<button data-act="pool-import">' + t("Import a pool") + "</button>" + encNewBtn() : encNewBtn();
   $("pools").innerHTML = Object.values(S.pools).map(p => {
     const st = S.statusOf[p.name] || "", scan = scanText(st), exp = expandText(st);
     const errors = (st.match(/^errors: (.*)$/m) || [, "?"])[1];
@@ -686,20 +687,20 @@ function renderStorage() {
     stat(t("Fragmentation"), p.fragmentation + " %", "") + (errors.startsWith("No known") ? stat(t("Errors"), t("None"), "ok") : stat(t("Errors"), errors, "bad")) + "</div>" +
     '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" + scanProgress(scan) + (exp ? scanProgress(exp) : "") +
     (scan.resilver ? "" : '<button data-act="scrub" data-pool="' + esc(p.name) + '" data-running="' + scan.running + '" class="' + (scan.running ? "danger" : "primary") + '">' +
-    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") + poolManage(p, st, root) + "</article>";
+    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") + scrubEvery(p.name) + poolManage(p, st, root) + "</article>";
   }).join("");
 
   const del = name => FEAT().pools && name.includes("/") ? '<button class="danger" data-act="ds-del" data-ds="' + esc(name) + '">' + t("Delete") + "</button>" : "";
   const rows = byTag(fsRows(), r => "ds:" + r[0]);
-  $("datasets").innerHTML = "<thead><tr>" + ["Dataset", "Used", "Available", "Compression", "Ratio", "Block size", "Quota"].concat(FEAT().autosnap ? ["Auto snapshots"] : [], [""])
+  $("datasets").innerHTML = "<thead><tr>" + ["Dataset", "Used", "Available", "Compression", "Ratio", "Block size", "Quota"].concat(FEAT().autosnap ? ["Auto snapshots"] : [], ENC() ? ["Encryption"] : [], [""])
     .map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
     rows.map(([name, used, avail, , ratio, comp, rs, quota, , auto]) =>
       "<tr><td>" + nameBlock("ds:" + name, name, name) + "</td><td>" + bytes(Number(used)) + "</td><td>" + bytes(Number(avail)) + "</td><td>" + esc(comp) +
       "</td><td>× " + nf(Number(ratio), 2) + "</td><td>" + bytes(Number(rs)) + "</td><td>" + (quota === "0" ? "—" : bytes(Number(quota))) +
-      (FEAT().autosnap ? "</td><td>" + (auto === "true" ? t("yes") : t("no")) : "") +
+      (FEAT().autosnap ? "</td><td>" + autoLabels(name, auto) : "") + (ENC() ? "</td><td>" + encCell(name) : "") +
       '</td><td class="actions"><button data-act="ds-edit" data-ds="' + esc(name) + '" data-comp="' + esc(comp) + '" data-quota="' + (quota === "0" ? "none" : esc(quota)) +
       '" data-auto="' + (auto === "true" ? "true" : "false") +
-      '">' + t("Edit") + '</button><button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + del(name) + "</td></tr>").join("") + "</tbody>";
+      '">' + t("Edit") + '</button><button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + restoreBtn(name) + del(name) + "</td></tr>").join("") + "</tbody>";
 
   // ZFS volumes (block devices, /dev/zvol/<name>): size, space used, compression.
   const vols = byTag(S.datasets.filter(isVol), r => "ds:" + r[0]);
@@ -716,7 +717,7 @@ function renderStorage() {
         : '<button data-act="iscsi" data-ds="' + esc(name) + '">' + t("Export") + "</button>") : "") +
       '</td><td class="actions">' +
       (FEAT().pools ? '<button data-act="zvol-grow" data-ds="' + esc(name) + '" data-size="' + esc(size) + '">' + t("Grow") + "</button>" : "") +
-      '<button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + del(name) + "</td></tr>").join("") + "</tbody>";
+      '<button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + restoreBtn(name) + del(name) + "</td></tr>").join("") + "</tbody>";
 
   // Rotating snapshots (zfs-auto-snapshot) are summed up per label, not listed.
   const auto = {}, manual = [];
@@ -731,6 +732,12 @@ function renderStorage() {
   // Manual snapshots sharing a name (one recursive snapshot, a migration) make one row.
   const named = {};
   for (const s of manual.reverse()) (named[s[0].split("@")[1]] = named[s[0].split("@")[1]] || []).push(s);
+  $("autosnap-keep").hidden = !SCH();
+  if (SCH()) $("autosnap-keep").innerHTML = '<div class="card-head"><b>' + t("Automatic snapshot rotation") + "</b></div>" + (SCH().autosnap_installed
+    ? '<div class="chips">' + LABELS.map(([l, n]) => '<button class="chip" data-act="autosnap-keep" data-label="' + l + '">' + t(n) + " · " +
+      (SCH().autosnap.keep[l] != null ? t("keep {n}", { n: SCH().autosnap.keep[l] }) : "—") + "</button>").join("") + "</div>" +
+      '<p class="sub">' + t("For the whole machine (zfs-auto-snapshot); which datasets get each rotation is chosen with Edit. A replication's backup side keeps its own copies longer.") + "</p>"
+    : '<p class="sub">' + t("zfs-auto-snapshot is not installed (apt install zfs-auto-snapshot).") + "</p>");
   $("snaps").innerHTML = !S.snapshots.length
     ? '<tbody><tr><td class="sub">' + t("No snapshots. Use the “Snapshot” button on a dataset to create one.") + "</td></tr></tbody>"
     : "<thead><tr><th>" + t("Snapshot") + "</th><th>" + t("Unique size") + "</th><th>" + t("Created") + "</th><th></th></tr></thead><tbody>" +
@@ -747,8 +754,10 @@ function renderStorage() {
 // Replication: the newest snapshot of each replicated dataset, late past its max age.
 function renderBackup() {
   const on = FEAT().replication;
-  document.querySelector('#nav [data-view="sauvegarde"]').hidden = !S.replication.length && !on;
+  document.querySelector('#nav [data-view="sauvegarde"]').hidden = !S.replication.length && !on && !FEAT().offsite;
   $("repl-setup").innerHTML = on && M ? replSetup() : "";
+  $("offsite-h").hidden = !OFF();
+  $("offsite").innerHTML = OFF() ? offsiteCards() : "";
   const when = t => new Date(t * 1000).toLocaleString(LOCALE());
   $("repl").innerHTML = !S.replication.length
     ? '<tbody><tr><td class="sub">' + (on ? t("Nothing replicated yet.") : t("No replication configured: list the replicated datasets under <code>replication</code> in the panel configuration.")) + "</td></tr></tbody>"
@@ -759,6 +768,87 @@ function renderBackup() {
         "</td><td>" + (never ? "—" : duration(Number(age))) + '</td><td><span class="pill ' + (late ? "bad" : "ok") + '">' +
         (never ? t("never") : late ? t("late (over {h} h)", { h: Number(max) / 3600 }) : t("up to date")) + "</span></td></tr>";
     }).join("") + "</tbody>";
+}
+
+/* off-site backup with restic (features.offsite) */
+
+const OFF = () => FEAT().offsite && M && M.offsite;
+const KINDS = { local: "Local folder or disk", sftp: "SFTP server", s3: "S3-compatible storage", b2: "Backblaze B2" };
+function offsiteCards() {
+  const o = OFF(), repos = Object.entries(o.repos || {}), jobs = Object.entries(o.jobs || {});
+  if (!o.installed) return '<article class="card"><p class="sub">' + t("restic is not installed (apt install restic).") + "</p></article>";
+  const btn = (act, attrs, label, cls) => "<button" + (cls ? ' class="' + cls + '"' : "") + ' data-act="' + act + '"' + attrs + ">" + label + "</button>";
+  const when = s => new Date(s * 1000).toLocaleString(LOCALE());
+  const keep = j => [["keep_daily", "{n} daily"], ["keep_weekly", "{n} weekly"], ["keep_monthly", "{n} monthly"]].filter(([k]) => j[k] > 0).map(([k, l]) => t(l, { n: j[k] })).join(", ");
+  const state = ds => {
+    const st = (o.status.jobs || {})[ds];
+    if (!st) return '<span class="pill">' + t("never run") + "</span>";
+    return '<span class="pill ' + (st.ok ? "ok" : "bad") + '">' + (st.ok ? t("succeeded") : t("failed")) + "</span> " + esc(when(st.time)) + (st.ok ? "" : '<br><small class="sys">' + esc(st.msg || "") + "</small>");
+  };
+  const last = (o.status.restore || {}).last;
+  return '<article class="card"><div class="card-head"><b>' + t("Repositories") + "</b>" + btn("rs-repo", "", t("New repository"), repos.length ? "" : "primary") + "</div>" +
+    (repos.length ? repos.map(([n, r]) => '<div class="svc"><b>' + esc(n) + '</b><span class="sub">' + t(KINDS[r.kind]) + " · " + esc(r.location) + "</span>" +
+      btn("rs-repo", ' data-name="' + esc(n) + '"', t("Edit")) + btn("rs-repo-del", ' data-name="' + esc(n) + '"', t("Remove"), "danger") + "</div>").join("")
+      : '<p class="sub">' + t("No repository. A repository is where restic keeps the encrypted, deduplicated copies: a disk or folder, an SFTP server, S3-compatible or B2 storage.") + "</p>") +
+    (o.key ? '<p class="sub">' + t("This machine's SFTP key, to add to the server's authorized_keys:") + '</p><code class="key">' + esc(o.key) + "</code>"
+      : '<p class="sub">' + t("SFTP repositories need this machine's own key.") + " " + btn("rs-key", "", t("Create this machine's key")) + "</p>") +
+    '<p class="sub">' + t("Passwords and access keys stay in root-only files on this machine (/etc/cairn-nas/restic) and are never shown again. Without the repository password, the copies cannot be read: keep it somewhere else too.") + "</p></article>" +
+    '<article class="card"><div class="card-head"><b>' + t("Backups") + "</b>" + (repos.length ? btn("rs-job", "", t("New backup"), jobs.length ? "" : "primary") : "") + "</div>" +
+    (jobs.length ? '<div class="table-wrap"><table><thead><tr>' + ["Dataset", "Repository", "Frequency", "Kept", "Last run", ""].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
+      jobs.map(([ds, j]) => { const d = ' data-ds="' + esc(ds) + '"'; return "<tr><td><b>" + esc(ds) + "</b></td><td>" + esc(j.repo) + "</td><td>" + t(j.every === "daily" ? "every day at 04:00" : "Sundays at 04:00") +
+        "</td><td>" + keep(j) + "</td><td>" + state(ds) + '</td><td class="actions">' + btn("rs-run", d + (o.running ? " disabled" : ""), t("Run now")) + btn("rs-restore", d, t("Restore…")) +
+        btn("rs-job", d, t("Edit")) + btn("rs-job-del", d, t("Stop"), "danger") + "</td></tr>"; }).join("") + "</tbody></table></div>"
+      : '<p class="sub">' + t("No backup. Each backup copies a fresh snapshot of a dataset (its own files, not its child datasets) to a repository, then applies the retention.") + "</p>") +
+    (o.running ? '<p class="sub">' + t("A backup or a restore is running.") + "</p>" : "") +
+    (last ? '<p class="sub">' + t("Last restore: {ds} into {target}, {when}: {res}", { ds: last.dataset, target: last.target, when: when(last.time), res: last.ok ? t("succeeded") : t("failed") + " (" + (last.msg || "") + ")" }) + "</p>" : "") +
+    "</article>";
+}
+async function repoForm(name) {
+  const r = name ? OFF().repos[name] : null;
+  const fd = await ask(name ? t("Repository {name}", { name }) : t("New repository"),
+    "<label>" + t("Name") + '<input name="name" required pattern="[A-Za-z0-9_\\-]+" value="' + esc(name || "") + '"' + (name ? " readonly" : "") + ' placeholder="' + t("e.g. offsite") + '"></label>' +
+    "<label>" + t("Type") + '<select name="kind">' + Object.entries(KINDS).map(([k, l]) => '<option value="' + k + '"' + (r && r.kind === k ? " selected" : "") + ">" + t(l) + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Location") + '<input name="loc" required value="' + esc(r ? r.location : "") + '" placeholder="/mnt/usb/restic"></label>' +
+    '<p class="sub">' + t("Local: /path · SFTP: user@host:/path · S3: https://endpoint/bucket/path · B2: bucket:path") + "</p>" +
+    "<label>" + t("Repository password (8 characters or more)") + '<input name="pass" type="password" autocomplete="new-password"' + (name ? ' placeholder="' + t("unchanged") + '"' : " required minlength=\"8\"") + "></label>" +
+    "<label>" + t("Access key ID (S3, B2)") + '<input name="kid" autocomplete="off"' + (name ? ' placeholder="' + t("unchanged") + '"' : "") + "></label>" +
+    "<label>" + t("Secret key (S3, B2)") + '<input name="secret" type="password" autocomplete="new-password"' + (name ? ' placeholder="' + t("unchanged") + '"' : "") + "></label>" +
+    "<label>" + t("Region (S3, optional)") + '<input name="region" autocomplete="off"></label>' +
+    '<p class="sub">' + t("An existing restic repository at that place is used as it is (same password); otherwise it is created.") + "</p>", t("Save"));
+  if (fd) mg({ op: "restic_repo_save", name: fd.get("name"), kind: fd.get("kind"), location: fd.get("loc").trim(), password: fd.get("pass"), key_id: fd.get("kid").trim(), secret: fd.get("secret"), region: fd.get("region").trim() },
+    t("Repository {name} saved", { name: fd.get("name") }));
+}
+async function jobForm(ds) {
+  const j = ds ? OFF().jobs[ds] : { every: "daily", keep_daily: 7, keep_weekly: 4, keep_monthly: 6 };
+  const fss = fsRows().filter(r => (r[8] || "").startsWith("/")).map(r => r[0]);
+  const num = (k, l) => "<label>" + t(l) + '<input name="' + k + '" type="number" min="0" max="1000" required value="' + (j[k] ?? 0) + '"></label>';
+  const fd = await ask(ds ? t("Backup of {name}", { name: ds }) : t("New backup"),
+    "<label>" + t("Dataset") + '<select name="ds"' + (ds ? " disabled" : "") + ">" + (ds ? [ds] : fss).map(n => "<option" + (n === ds ? " selected" : "") + ">" + esc(n) + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Repository") + '<select name="repo">' + Object.keys(OFF().repos).map(n => "<option" + (n === j.repo ? " selected" : "") + ">" + esc(n) + "</option>").join("") + "</select></label>" +
+    '<fieldset class="rows"><legend>' + t("Frequency") + "</legend>" + [["daily", "every day at 04:00"], ["weekly", "Sundays at 04:00"]].map(([e, l]) =>
+      '<label class="check"><input type="radio" name="every" value="' + e + '"' + (e === j.every ? " checked" : "") + "> " + t(l) + "</label>").join("") + "</fieldset>" +
+    num("keep_daily", "Daily copies kept") + num("keep_weekly", "Weekly copies kept") + num("keep_monthly", "Monthly copies kept") +
+    '<p class="sub">' + t("Older copies are forgotten and their data pruned after each run (restic forget --prune). Child datasets are not included: give each its own backup.") + "</p>", t("Save"));
+  if (!fd) return;
+  const name = ds || fd.get("ds");
+  mg({ op: "restic_job_save", dataset: name, repo: fd.get("repo"), every: fd.get("every"), keep_daily: Number(fd.get("keep_daily")), keep_weekly: Number(fd.get("keep_weekly")), keep_monthly: Number(fd.get("keep_monthly")) },
+    t("Backup of {name} saved", { name }));
+}
+async function offsiteRestore(ds) {
+  let list;
+  try { list = JSON.parse(await get("/api/backups?dataset=" + encodeURIComponent(ds))); } catch (e) { return banner(t("Read failed: {err}", { err: e.message })); }
+  if (!list.length) return ask(t("Restore {name}", { name: ds }), "<p>" + t("No copy in the repository yet.") + "</p>", t("Close"));
+  const mount = (fsRows().find(r => r[0] === ds) || [])[8] || "";
+  const fd = await ask(t("Restore {name}", { name: ds }),
+    "<label>" + t("Copy") + '<select name="id">' + list.map(s => '<option value="' + esc(s.id) + '">' + esc(new Date(s.time).toLocaleString(LOCALE())) + " · " + esc(s.id) + "</option>").join("") + "</select></label>" +
+    "<label>" + t("File or folder (empty: everything)") + '<input name="path" placeholder="' + t("e.g. 2025/invoices") + '"></label>' +
+    "<label>" + t("Into (a new folder inside a dataset)") + '<input name="target" required value="' + esc(mount + "/restored-" + new Date().toISOString().slice(0, 10)) + '"></label>' +
+    '<p class="sub">' + t("Nothing is overwritten: the folder must not exist yet. The restore runs in the background; its result shows here.") + "</p>", t("Restore"));
+  if (fd) mg({ op: "restic_restore", dataset: ds, snapshot: fd.get("id"), path: fd.get("path").trim(), target: fd.get("target").trim() }, t("Restore started"));
+}
+async function offsiteDrop(op, attrs, title, body, okMsg) {
+  const fd = await ask(title, "<p>" + body + "</p>", t("Remove"), true);
+  if (fd) mg({ op, ...attrs }, okMsg);
 }
 
 // Both halves of a pull replication: this machine copies others, others copy this one.
@@ -1225,13 +1315,105 @@ const act = (payload, okMsg) => once(async () => {
 });
 
 async function editDataset(name, comp, quota, auto) {
+  const sch = FEAT().autosnap && SCH();
   const fd = await ask(t("Edit {name}", { name }),
     "<label>" + t("Compression") + '<select name="comp">' + COMPRESSION.map(c => "<option" + (c === comp ? " selected" : "") + ">" + c + "</option>").join("") + "</select></label>" +
     "<label>" + t("Quota (e.g. 500G, 1T, none)") + '<input name="quota" required pattern="none|[0-9]+(\\.[0-9]+)?[KMGTP]?" value="' + esc(quota) + '"></label>' +
-    (FEAT().autosnap ? "<label>" + t("Automatic snapshots") + '<select name="auto"><option value="true">' + t("yes (rotation: quarter-hour, hour, day, week, month)") + "</option>" +
+    (sch ? '<fieldset class="rows"><legend>' + t("Automatic snapshots") + "</legend>" + LABELS.map(([l, n]) => '<label class="check"><input type="checkbox" name="lab" value="' + l + '"' +
+      (labelsOn(name).includes(l) ? " checked" : "") + "> " + t(n) + (SCH().autosnap.keep[l] != null ? ' <small class="sys">' + t("keep {n}", { n: SCH().autosnap.keep[l] }) + "</small>" : "") + "</label>").join("") + "</fieldset>"
+    : FEAT().autosnap ? "<label>" + t("Automatic snapshots") + '<select name="auto"><option value="true">' + t("yes (rotation: quarter-hour, hour, day, week, month)") + "</option>" +
       '<option value="false"' + (auto === "false" ? " selected" : "") + ">" + t("no") + "</option></select></label>" : "") +
     '<p class="sub">' + t("Compression only applies to data written afterwards. Child datasets inherit the automatic snapshot choice.") + "</p>");
-  if (fd) act({ action: "dataset_set", dataset: name, compression: fd.get("comp"), quota: fd.get("quota"), autosnap: fd.get("auto") || "" }, t("{name} updated", { name }));
+  if (!fd) return;
+  await act({ action: "dataset_set", dataset: name, compression: fd.get("comp"), quota: fd.get("quota"), autosnap: sch ? "" : fd.get("auto") || "" }, t("{name} updated", { name }));
+  const want = fd.getAll("lab");
+  if (sch && want.join() !== labelsOn(name).join()) mg({ op: "autosnap_labels", dataset: name, labels: want }, t("{name} updated", { name }));
+}
+
+/* native encryption (features.encryption) */
+
+const ENC = () => FEAT().encryption && M && M.encryption;
+const encNewBtn = () => ENC() ? '<button data-act="enc-new">' + t("New encrypted dataset") + "</button>" : "";
+function encCell(ds) {
+  const e = ENC().find(x => x.name === ds);
+  if (!e) return "—";
+  const st = e.keystatus === "available" ? t("unlocked") : t("locked");
+  if (e.root !== ds) return '<small class="sys">' + t("{st}, key of {root}", { st, root: e.root }) + "</small>";
+  const d = ' data-ds="' + esc(ds) + '"';
+  return '<span class="pill ' + (e.keystatus === "available" ? "ok" : "warn") + '">' + st + "</span> " +
+    (e.keystatus === "available" ? '<button data-act="enc-lock"' + d + ">" + t("Lock") + "</button>" : '<button data-act="enc-unlock"' + d + ' data-pass="' + (e.keyfile ? "" : "1") + '">' + t("Unlock") + "</button>") +
+    '<br><small class="sys">' + (e.keyfile ? t("key file") : t("passphrase")) + "</small>" +
+    (e.keyfile ? ' <button class="link" data-act="enc-boot"' + d + ' data-on="' + (e.boot ? "" : "1") + '">' + (e.boot ? t("unlocked at boot") : t("not unlocked at boot")) + "</button>" : "");
+}
+async function encForm() {
+  const fd = await ask(t("New encrypted dataset"), "<label>" + t("In") + '<select name="parent">' + fsRows().map(r => "<option>" + esc(r[0]) + "</option>").join("") + "</select></label>" +
+    "<label>" + t("Name") + '<input name="leaf" required pattern="[A-Za-z0-9_.:\\-]+" placeholder="' + t("e.g. papers") + '"></label>' +
+    '<fieldset class="rows"><legend>' + t("Key") + "</legend>" +
+    '<label class="check"><input type="radio" name="kf" value="passphrase" checked> ' + t("Passphrase: asked at each unlock, never stored") + "</label>" +
+    '<label class="check"><input type="radio" name="kf" value="keyfile"> ' + t("Key file on this machine (/etc/cairn-nas/keys, root only)") + "</label></fieldset>" +
+    "<label>" + t("Passphrase (8 characters or more)") + '<input name="pass" type="password" minlength="8" maxlength="512" autocomplete="new-password"></label>' +
+    "<label>" + t("Passphrase again") + '<input name="pass2" type="password" autocomplete="new-password"></label>' +
+    '<label class="check"><input type="checkbox" name="boot"> ' + t("Unlock at boot (key file only)") + "</label>" +
+    '<p class="sub">' + t("An existing dataset cannot be encrypted in place: create an encrypted one and copy the data into it. A lost passphrase or key file means lost data; a key file protects the disks taken away, not the machine itself.") + "</p>", t("Create"));
+  if (!fd) return;
+  const kf = fd.get("kf"), dataset = fd.get("parent") + "/" + fd.get("leaf");
+  if (kf === "passphrase" && fd.get("pass") !== fd.get("pass2")) return banner(t("The two passphrases differ"));
+  mg({ op: "enc_create", dataset, keyformat: kf, passphrase: kf === "passphrase" ? fd.get("pass") : "", boot: fd.get("boot") === "on" }, t("Encrypted dataset {name} created", { name: dataset }));
+}
+async function encUnlock(ds, pass) {
+  if (!pass) return mg({ op: "enc_unlock", dataset: ds }, t("{name} unlocked", { name: ds }));
+  const fd = await ask(t("Unlock {name}", { name: ds }), "<label>" + t("Passphrase") + '<input name="pass" type="password" required minlength="8" autocomplete="current-password"></label>', t("Unlock"));
+  if (fd) mg({ op: "enc_unlock", dataset: ds, passphrase: fd.get("pass") }, t("{name} unlocked", { name: ds }));
+}
+async function encLock(ds) {
+  const fd = await ask(t("Lock {name}", { name: ds }), "<p>" + t("Its file systems and those below it are unmounted and the key is forgotten until the next unlock. Refused while a share or a replication uses them.") + "</p>", t("Lock"));
+  if (fd) mg({ op: "enc_lock", dataset: ds }, t("{name} locked", { name: ds }));
+}
+
+/* schedules (features.schedules): automatic snapshot labels and rotation, scrub, SMART self-tests */
+
+const SCH = () => FEAT().schedules && M && M.schedules;
+const LABELS = [["frequent", "every 15 min"], ["hourly", "hourly"], ["daily", "daily"], ["weekly", "weekly"], ["monthly", "monthly"]];
+// zfs-auto-snapshot: a label is skipped when the general switch or the label's own property is false.
+const labelsOn = ds => { const p = (SCH().autosnap.props || {})[ds] || {}; return LABELS.map(l => l[0]).filter(l => p[""] !== "false" && p[l] !== "false"); };
+function autoLabels(ds, auto) {
+  if (!SCH()) return auto === "true" ? t("yes") : t("no");
+  const on = labelsOn(ds);
+  const SHORT = { frequent: "15 min", hourly: "hour", daily: "day", weekly: "week", monthly: "month" };
+  return !on.length ? t("no") : on.length === LABELS.length ? t("all") : on.map(l => t(SHORT[l])).join(" · ");
+}
+const EVERY = { off: "never", daily: "every day", weekly: "every week", monthly: "every month" };
+function scrubEvery(pool) {
+  if (!SCH() || !SCH().scrub_timers) return "";
+  const e = SCH().scrub[pool] || "off";
+  return '<p class="sub">' + t("Scheduled scrub: {v}", { v: t(EVERY[e]) }) + ' <button data-act="scrub-every" data-pool="' + esc(pool) + '" data-every="' + e + '">' + t("Change") + "</button></p>";
+}
+function smartCard() {
+  if (!SCH()) return "";
+  const sm = SCH().smart;
+  return '<article class="card"><div class="card-head"><b>' + t("SMART self-tests") + "</b>" + '<button data-act="smart-every">' + t("Change") + "</button></div>" +
+    '<p class="sub">' + t("Short test: {a}. Long test: {b}. The last result of each disk is in its card (Disk by disk); a failed test raises an alert.", { a: t(EVERY[sm.short]), b: t(EVERY[sm.long]) }) + "</p></article>";
+}
+async function keepForm(label) {
+  const n = SCH().autosnap.keep[label], name = t(LABELS.find(l => l[0] === label)[1]);
+  const fd = await ask(t("Rotation: {name}", { name }), "<label>" + t("Snapshots kept per dataset") + '<input name="keep" type="number" min="1" max="1000" required value="' + (n || "") + '"></label>' +
+    '<p class="sub">' + t("Older ones are deleted at the next run. A replication pulling from this machine needs its last copied snapshot to still be here: keep enough to cover its schedule.") + "</p>", t("Save"));
+  if (fd) mg({ op: "autosnap_keep", label, keep: Number(fd.get("keep")) }, t("Rotation updated"));
+}
+async function scrubForm(pool, cur) {
+  const fd = await ask(t("Scheduled scrub of {pool}", { pool }), '<fieldset class="rows"><legend>' + t("Frequency") + "</legend>" + ["off", "weekly", "monthly"].map(e =>
+    '<label class="check"><input type="radio" name="every" value="' + e + '"' + (e === cur ? " checked" : "") + "> " + t(EVERY[e]) + "</label>").join("") + "</fieldset>" +
+    '<p class="sub">' + t("OpenZFS timers (zfs-scrub-weekly@ / zfs-scrub-monthly@). Debian's zfsutils-linux also scrubs every pool on the second Sunday of the month (/etc/cron.d/zfsutils-linux).") + "</p>", t("Save"));
+  if (fd) mg({ op: "scrub_every", pool, every: fd.get("every") }, t("Scrub schedule of {pool} saved", { pool }));
+}
+async function smartForm() {
+  const sm = SCH().smart;
+  const radios = (kind, opts) => '<fieldset class="rows"><legend>' + t(kind === "short" ? "Short test (a few minutes)" : "Long test (hours on a large disk)") + "</legend>" + opts.map(e =>
+    '<label class="check"><input type="radio" name="' + kind + '" value="' + e + '"' + (e === sm[kind] ? " checked" : "") + "> " + t(EVERY[e]) + "</label>").join("") + "</fieldset>";
+  const fd = await ask(t("SMART self-tests"), radios("short", ["off", "daily", "weekly"]) + radios("long", ["off", "weekly", "monthly"]) +
+    '<p class="sub">' + t("Every disk at 01:30 (weekly and monthly: on Sunday). Disks keep working during the test.") + "</p>", t("Save"));
+  if (!fd) return;
+  for (const kind of ["short", "long"]) if (fd.get(kind) !== sm[kind]) await mg({ op: "smart_every", kind, every: fd.get(kind) }, t("Self-test schedule saved"));
 }
 
 async function createSnap(ds) {
@@ -1262,6 +1444,81 @@ async function destroySnaps(snap) {
     } catch (e) { banner(t("Failed after {done} / {total} snapshots deleted: {err}", { done, total: names.length, err: e.message })); }
     await slowTick();
   });
+}
+
+/* snapshot restore (features.restore): browse, download, copy back, clone, roll back */
+
+const snapsOf = ds => S.snapshots.filter(s => s[0].split("@")[0] === ds).sort((a, b) => Number(b[2]) - Number(a[2]));
+const restoreBtn = ds => FEAT().restore && snapsOf(ds).length ? '<button data-act="ds-restore" data-ds="' + esc(ds) + '">' + t("Restore…") + "</button>" : "";
+const whenS = s => new Date(Number(s) * 1000).toLocaleString(LOCALE());
+
+async function restoreForm(ds) {
+  const list = snapsOf(ds), vol = isVol(S.datasets.find(r => r[0] === ds) || []);
+  const fd = await ask(t("Restore from a snapshot of {name}", { name: ds }),
+    "<label>" + t("Snapshot") + '<select name="snap">' + list.map(s => '<option value="' + esc(s[0]) + '">' + esc(s[0].split("@")[1]) + " · " + esc(whenS(s[2])) + "</option>").join("") + "</select></label>" +
+    '<fieldset class="rows"><legend>' + t("What to do") + "</legend>" +
+    (vol ? "" : '<label class="check"><input type="radio" name="what" value="browse" checked> ' + t("Browse it: download or copy back files and folders") + "</label>") +
+    '<label class="check"><input type="radio" name="what" value="clone"' + (vol ? " checked" : "") + "> " + t("Clone it into a new dataset (read-write copy, the original stays as it is)") + "</label>" +
+    '<label class="check"><input type="radio" name="what" value="rollback"> ' + t("Roll the dataset back to it (destructive)") + "</label></fieldset>", t("Continue"));
+  if (!fd) return;
+  const snap = fd.get("snap");
+  return { browse: browseSnap, clone: cloneForm, rollback: rollbackForm }[fd.get("what")](snap);
+}
+
+// The listing is redrawn inside the open dialog; "Restore" closes it and asks for confirmation.
+let BR = null;
+async function browseSnap(snap) {
+  BR = { snap, pick: null };
+  $("dlg-cancel").hidden = true;
+  const done = ask(t("Inside {name}", { name: snap }), '<div id="br"><p class="sub">' + t("Loading…") + "</p></div>", t("Close"));
+  browseTo("");
+  await done;
+  $("dlg-cancel").hidden = false;
+  const pick = BR.pick;
+  BR = null;
+  if (pick) return restorePick(snap, pick);
+}
+async function browseTo(path) {
+  const el = $("br");
+  if (!el || !BR) return;
+  try {
+    const r = JSON.parse(await get("/api/browse?snap=" + encodeURIComponent(BR.snap) + "&path=" + encodeURIComponent(path)));
+    const q = p => "snap=" + encodeURIComponent(BR.snap) + "&path=" + encodeURIComponent(p);
+    const join = n => (r.path ? r.path + "/" : "") + n;
+    const up = r.path.includes("/") ? r.path.replace(/\/[^/]*$/, "") : "";
+    el.innerHTML = '<p class="sub crumbs">/' + esc(r.path) + (r.path ? ' <button type="button" data-act="br-open" data-path="' + esc(up) + '">' + t("Up") + "</button>" : "") + "</p>" +
+      (!r.entries.length ? '<p class="sub">' + t("Empty folder.") + "</p>" :
+      '<div class="table-wrap files"><table><thead><tr><th>' + t("Name") + "</th><th>" + t("Size") + "</th><th>" + t("Modified") + "</th><th></th></tr></thead><tbody>" +
+      r.entries.map(e => "<tr><td>" + (e.dir ? '<button type="button" class="link" data-act="br-open" data-path="' + esc(join(e.name)) + '">' + esc(e.name) + "/</button>" : esc(e.name) + (e.link ? " →" : "")) +
+        "</td><td>" + (e.dir ? "—" : bytes(e.size)) + "</td><td>" + esc(whenS(e.mtime)) + '</td><td class="actions">' +
+        '<a class="btn" href="/api/download?' + q(join(e.name)) + '" download>' + t(e.dir ? "Download (.tar)" : "Download") + "</a>" +
+        '<button type="button" data-act="br-pick" data-path="' + esc(join(e.name)) + '">' + t("Restore") + "</button></td></tr>").join("") + "</tbody></table></div>") +
+      '<p class="sub">' + t("Downloads stop at 4 GiB: restore larger items instead.") + "</p>";
+    paint(el);
+  } catch (e) { el.innerHTML = '<p class="sub">' + esc(e.message) + "</p>"; }
+}
+async function restorePick(snap, path) {
+  const leaf = path.split("/").pop(), as = leaf + ".restored-" + snap.split("@")[1];
+  const fd = await ask(t("Restore {name}?", { name: leaf }),
+    "<p>" + t("<b>{path}</b> is copied from the snapshot back into the dataset, next to the original, as <b>{as}</b>. Nothing is overwritten.", { path: esc(path), as: esc(as) }) + "</p>", t("Restore"));
+  if (fd) mg({ op: "snap_restore", snapshot: snap, path }, t("{name} restored", { name: as }));
+}
+async function cloneForm(snap) {
+  const ds = snap.split("@")[0];
+  const fd = await ask(t("Clone {name}", { name: snap }),
+    "<label>" + t("New dataset") + '<input name="ds" required value="' + esc(ds + "-" + snap.split("@")[1].replace(/[^A-Za-z0-9_.:-]/g, "-")) + '"></label>' +
+    '<p class="sub">' + t("A read-write copy that shares its blocks with the snapshot (no space used at first). While the clone exists, the snapshot cannot be deleted.") + "</p>", t("Clone"));
+  if (fd) mg({ op: "snap_clone", snapshot: snap, dataset: fd.get("ds").trim() }, t("{name} created", { name: fd.get("ds").trim() }));
+}
+async function rollbackForm(snap) {
+  const ds = snap.split("@")[0], at = Number((S.snapshots.find(s => s[0] === snap) || [])[2] || 0);
+  const lost = snapsOf(ds).filter(s => Number(s[2]) > at).map(s => s[0]);
+  const fd = await ask(t("Roll {name} back?", { name: ds }),
+    "<p>" + t("Every change made to <b>{name}</b> since {when} is lost: files written, changed or deleted after that go back to how they were. There is no undo.", { name: esc(ds), when: esc(whenS(at)) }) + "</p>" +
+    (lost.length ? '<p class="sub">' + tp(lost.length, "{n} newer snapshot is destroyed too:", "{n} newer snapshots are destroyed too:") + "<br>" + lost.slice(0, 12).map(esc).join("<br>") +
+      (lost.length > 12 ? "<br>" + t("and {n} more", { n: lost.length - 12 }) : "") + "</p>" : "") +
+    '<p class="sub">' + t("Refused while a replication or an iSCSI export uses it, or when a newer snapshot has a clone. To get back a few files only, browse the snapshot instead.") + "</p>" + confirmName(), t("Roll back"), true);
+  if (fd) mg({ op: "snap_rollback", snapshot: snap, confirm: fd.get("confirm") }, t("{name} rolled back", { name: ds }));
 }
 
 // One delegated listener: buttons are re-rendered every tick.
@@ -1303,6 +1560,9 @@ document.addEventListener("click", e => {
     case "ds-snap": return createSnap(d.ds);
     case "snap-del": return destroySnap(d.snap);
     case "snap-del-many": return destroySnaps(d.snap);
+    case "ds-restore": return restoreForm(d.ds);
+    case "br-open": return browseTo(d.path);
+    case "br-pick": BR.pick = d.path; return closeDialog("cancel");
     case "logout": return post("/api/logout", {}).finally(() => location.reload());
     case "theme": { const k = Object.keys(THEMES); return setTheme(k[(k.indexOf(document.documentElement.dataset.theme || "") + 1) % k.length]); }
     case "lang": {
@@ -1352,6 +1612,22 @@ document.addEventListener("click", e => {
     case "disk-offline": return diskOffline(d.pool, d.dev);
     case "disk-online": return mg({ op: "disk_online", pool: d.pool, device: d.dev }, t("{dev} is back online", { dev: d.dev }));
     case "disk-replace": return diskReplace(d.pool, d.dev);
+    case "rs-repo": return repoForm(d.name);
+    case "rs-repo-del": return offsiteDrop("restic_repo_delete", { name: d.name }, t("Remove repository {name}", { name: d.name }),
+      t("This machine forgets the repository and its password; the copies already in it stay where they are."), t("Repository {name} removed", { name: d.name }));
+    case "rs-key": return mg({ op: "restic_key" }, t("Key created"));
+    case "rs-job": return jobForm(d.ds);
+    case "rs-job-del": return offsiteDrop("restic_job_delete", { dataset: d.ds }, t("Stop the backup of {name}", { name: d.ds }),
+      t("No more copies are made; those already in the repository stay there."), t("Backup of {name} stopped", { name: d.ds }));
+    case "rs-run": return mg({ op: "restic_run", dataset: d.ds }, t("Backup of {name} started", { name: d.ds }));
+    case "rs-restore": return offsiteRestore(d.ds);
+    case "enc-new": return encForm();
+    case "enc-unlock": return encUnlock(d.ds, d.pass);
+    case "enc-lock": return encLock(d.ds);
+    case "enc-boot": return mg({ op: "enc_boot", dataset: d.ds, on: d.on === "1" }, d.on === "1" ? t("{name} unlocked at boot", { name: d.ds }) : t("{name} no longer unlocked at boot", { name: d.ds }));
+    case "autosnap-keep": return keepForm(d.label);
+    case "scrub-every": return scrubForm(d.pool, d.every);
+    case "smart-every": return smartForm();
     case "bonjour": return mg({ op: "bonjour", on: d.on === "1" }, d.on === "1" ? t("Bonjour announcement on") : t("Bonjour announcement off"));
   }
 });

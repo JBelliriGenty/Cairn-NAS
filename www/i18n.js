@@ -306,6 +306,98 @@ const DICT = {
     // sign-in
     "Sign-in": "Connexion", "Sign in": "Se connecter",
     "A server account that belongs to the administration group.": "Compte du serveur membre du groupe d'administration.",
+    // snapshot restore (features.restore)
+    "Restore…": "Restaurer…", "Restore": "Restaurer", "Continue": "Continuer", "Up": "Remonter", "Modified": "Modifié",
+    "Download": "Télécharger", "Download (.tar)": "Télécharger (.tar)", "Empty folder.": "Dossier vide.", "What to do": "Que faire",
+    "Restore from a snapshot of {name}": "Restaurer depuis un snapshot de {name}",
+    "Browse it: download or copy back files and folders": "Le parcourir : télécharger ou recopier des fichiers et dossiers",
+    "Clone it into a new dataset (read-write copy, the original stays as it is)": "Le cloner dans un nouveau dataset (copie modifiable, l'original reste tel quel)",
+    "Roll the dataset back to it (destructive)": "Revenir en arrière jusqu'à lui (destructif)",
+    "Inside {name}": "Dans {name}", "Downloads stop at 4 GiB: restore larger items instead.": "Les téléchargements s'arrêtent à 4 Gio : restaurez plutôt ce qui est plus gros.",
+    "Restore {name}?": "Restaurer {name} ?", "{name} restored": "{name} restauré",
+    "<b>{path}</b> is copied from the snapshot back into the dataset, next to the original, as <b>{as}</b>. Nothing is overwritten.":
+      "<b>{path}</b> est recopié du snapshot dans le dataset, à côté de l'original, sous le nom <b>{as}</b>. Rien n'est écrasé.",
+    "Clone {name}": "Cloner {name}", "Clone": "Cloner", "{name} created": "{name} créé",
+    "A read-write copy that shares its blocks with the snapshot (no space used at first). While the clone exists, the snapshot cannot be deleted.":
+      "Une copie modifiable qui partage ses blocs avec le snapshot (aucune place prise au départ). Tant que le clone existe, le snapshot ne peut pas être supprimé.",
+    "Roll {name} back?": "Revenir en arrière sur {name} ?", "Roll back": "Revenir en arrière", "{name} rolled back": "{name} remis à l'état du snapshot",
+    "Every change made to <b>{name}</b> since {when} is lost: files written, changed or deleted after that go back to how they were. There is no undo.":
+      "Tout ce qui a changé dans <b>{name}</b> depuis le {when} est perdu : les fichiers écrits, modifiés ou supprimés depuis reviennent à leur état d'alors. Impossible d'annuler.",
+    "{n} newer snapshot is destroyed too:": "{n} snapshot plus récent est aussi détruit :", "{n} newer snapshots are destroyed too:": "{n} snapshots plus récents sont aussi détruits :",
+    "and {n} more": "et {n} autres",
+    "Refused while a replication or an iSCSI export uses it, or when a newer snapshot has a clone. To get back a few files only, browse the snapshot instead.":
+      "Refusé tant qu'une réplication ou un export iSCSI l'utilise, ou si un snapshot plus récent a un clone. Pour ne récupérer que quelques fichiers, parcourez plutôt le snapshot.",
+    // schedules (features.schedules)
+    "Last self-test": "Dernier autotest", "15 min": "15 min", "hour": "heure", "day": "jour", "week": "semaine", "month": "mois", "{h} h": "{h} h", "all": "toutes",
+    "every 15 min": "toutes les 15 min", "hourly": "toutes les heures", "daily": "tous les jours", "weekly": "toutes les semaines", "monthly": "tous les mois",
+    "every day": "chaque jour", "every week": "chaque semaine", "every month": "chaque mois",
+    "Automatic snapshot rotation": "Rotation des snapshots automatiques", "keep {n}": "en garder {n}",
+    "For the whole machine (zfs-auto-snapshot); which datasets get each rotation is chosen with Edit. A replication's backup side keeps its own copies longer.":
+      "Pour toute la machine (zfs-auto-snapshot) ; les datasets concernés par chaque rotation se choisissent avec Modifier. Le côté sauvegarde d'une réplication garde ses propres copies plus longtemps.",
+    "zfs-auto-snapshot is not installed (apt install zfs-auto-snapshot).": "zfs-auto-snapshot n'est pas installé (apt install zfs-auto-snapshot).",
+    "Scheduled scrub: {v}": "Scrub planifié : {v}", "SMART self-tests": "Autotests SMART",
+    "Short test: {a}. Long test: {b}. The last result of each disk is in its card (Disk by disk); a failed test raises an alert.":
+      "Test court : {a}. Test long : {b}. Le dernier résultat de chaque disque figure sur sa carte (Disque par disque) ; un test échoué déclenche une alerte.",
+    "Rotation: {name}": "Rotation : {name}", "Snapshots kept per dataset": "Snapshots gardés par dataset",
+    "Older ones are deleted at the next run. A replication pulling from this machine needs its last copied snapshot to still be here: keep enough to cover its schedule.":
+      "Les plus anciens sont supprimés au passage suivant. Une réplication qui tire depuis cette machine a besoin que son dernier snapshot copié soit encore là : gardez-en assez pour couvrir sa fréquence.",
+    "Rotation updated": "Rotation mise à jour", "Scheduled scrub of {pool}": "Scrub planifié de {pool}", "Frequency": "Fréquence",
+    "OpenZFS timers (zfs-scrub-weekly@ / zfs-scrub-monthly@). Debian's zfsutils-linux also scrubs every pool on the second Sunday of the month (/etc/cron.d/zfsutils-linux).":
+      "Minuteries OpenZFS (zfs-scrub-weekly@ / zfs-scrub-monthly@). Le paquet zfsutils-linux de Debian lance aussi un scrub de chaque pool le deuxième dimanche du mois (/etc/cron.d/zfsutils-linux).",
+    "Scrub schedule of {pool} saved": "Planification du scrub de {pool} enregistrée",
+    "Short test (a few minutes)": "Test court (quelques minutes)", "Long test (hours on a large disk)": "Test long (des heures sur un gros disque)",
+    "Every disk at 01:30 (weekly and monthly: on Sunday). Disks keep working during the test.": "Tous les disques à 01:30 (hebdomadaire et mensuel : le dimanche). Les disques restent utilisables pendant le test.",
+    "Self-test schedule saved": "Planification des autotests enregistrée",
+    // native encryption (features.encryption)
+    "New encrypted dataset": "Nouveau dataset chiffré", "unlocked": "déverrouillé", "locked": "verrouillé",
+    "{st}, key of {root}": "{st}, clé de {root}", "Lock": "Verrouiller", "Unlock": "Déverrouiller", "key file": "fichier de clé", "passphrase": "phrase de passe",
+    "unlocked at boot": "déverrouillé au démarrage", "not unlocked at boot": "non déverrouillé au démarrage", "e.g. papers": "ex. papiers", "Key": "Clé",
+    "Passphrase: asked at each unlock, never stored": "Phrase de passe : demandée à chaque déverrouillage, jamais enregistrée",
+    "Key file on this machine (/etc/cairn-nas/keys, root only)": "Fichier de clé sur cette machine (/etc/cairn-nas/keys, root seulement)",
+    "Passphrase (8 characters or more)": "Phrase de passe (8 caractères ou plus)", "Passphrase again": "Phrase de passe, à nouveau",
+    "Unlock at boot (key file only)": "Déverrouiller au démarrage (fichier de clé seulement)",
+    "An existing dataset cannot be encrypted in place: create an encrypted one and copy the data into it. A lost passphrase or key file means lost data; a key file protects the disks taken away, not the machine itself.":
+      "Un dataset existant ne peut pas être chiffré sur place : créez-en un chiffré et copiez-y les données. Phrase de passe ou fichier de clé perdu = données perdues ; un fichier de clé protège les disques emportés, pas la machine elle-même.",
+    "The two passphrases differ": "Les deux phrases de passe diffèrent", "Encrypted dataset {name} created": "Dataset chiffré {name} créé",
+    "{name} unlocked": "{name} déverrouillé", "Unlock {name}": "Déverrouiller {name}", "Passphrase": "Phrase de passe", "Lock {name}": "Verrouiller {name}",
+    "Its file systems and those below it are unmounted and the key is forgotten until the next unlock. Refused while a share or a replication uses them.":
+      "Ses systèmes de fichiers et ceux en dessous sont démontés et la clé oubliée jusqu'au prochain déverrouillage. Refusé tant qu'un partage ou une réplication les utilise.",
+    "{name} locked": "{name} verrouillé", "{name} unlocked at boot": "{name} déverrouillé au démarrage", "{name} no longer unlocked at boot": "{name} n'est plus déverrouillé au démarrage",
+    // off-site backup (features.offsite)
+    "Off-site backup": "Sauvegarde externe", "restic is not installed (apt install restic).": "restic n'est pas installé (apt install restic).",
+    "Local folder or disk": "Dossier ou disque local", "SFTP server": "Serveur SFTP", "S3-compatible storage": "Stockage compatible S3", "Backblaze B2": "Backblaze B2",
+    "{n} daily": "{n} quotidiennes", "{n} weekly": "{n} hebdomadaires", "{n} monthly": "{n} mensuelles",
+    "never run": "jamais lancée", "succeeded": "réussie", "failed": "en échec", "Repositories": "Dépôts", "New repository": "Nouveau dépôt",
+    "No repository. A repository is where restic keeps the encrypted, deduplicated copies: a disk or folder, an SFTP server, S3-compatible or B2 storage.":
+      "Aucun dépôt. Un dépôt est l'endroit où restic garde les copies chiffrées et dédupliquées : un disque ou un dossier, un serveur SFTP, un stockage compatible S3 ou B2.",
+    "This machine's SFTP key, to add to the server's authorized_keys:": "Clé SFTP de cette machine, à ajouter dans le authorized_keys du serveur :",
+    "SFTP repositories need this machine's own key.": "Les dépôts SFTP demandent une clé propre à cette machine.",
+    "Passwords and access keys stay in root-only files on this machine (/etc/cairn-nas/restic) and are never shown again. Without the repository password, the copies cannot be read: keep it somewhere else too.":
+      "Mots de passe et clés d'accès restent dans des fichiers réservés à root sur cette machine (/etc/cairn-nas/restic) et ne sont plus jamais affichés. Sans le mot de passe du dépôt, les copies sont illisibles : gardez-le aussi ailleurs.",
+    "Backups": "Sauvegardes", "New backup": "Nouvelle sauvegarde", "Kept": "Conservées", "Last run": "Dernier passage",
+    "every day at 04:00": "chaque jour à 04:00", "Sundays at 04:00": "le dimanche à 04:00",
+    "No backup. Each backup copies a fresh snapshot of a dataset (its own files, not its child datasets) to a repository, then applies the retention.":
+      "Aucune sauvegarde. Chaque sauvegarde copie un snapshot frais d'un dataset (ses propres fichiers, pas ses datasets enfants) vers un dépôt, puis applique la rétention.",
+    "A backup or a restore is running.": "Une sauvegarde ou une restauration est en cours.",
+    "Last restore: {ds} into {target}, {when}: {res}": "Dernière restauration : {ds} dans {target}, {when} : {res}",
+    "Repository {name}": "Dépôt {name}", "e.g. offsite": "ex. externe", "Location": "Emplacement",
+    "Local: /path · SFTP: user@host:/path · S3: https://endpoint/bucket/path · B2: bucket:path": "Local : /chemin · SFTP : utilisateur@hôte:/chemin · S3 : https://point-d-accès/bucket/chemin · B2 : bucket:chemin",
+    "Repository password (8 characters or more)": "Mot de passe du dépôt (8 caractères ou plus)", "unchanged": "inchangé",
+    "Access key ID (S3, B2)": "Identifiant de clé d'accès (S3, B2)", "Secret key (S3, B2)": "Clé secrète (S3, B2)", "Region (S3, optional)": "Région (S3, facultatif)",
+    "An existing restic repository at that place is used as it is (same password); otherwise it is created.": "Un dépôt restic déjà présent à cet endroit est repris tel quel (même mot de passe) ; sinon il est créé.",
+    "Repository {name} saved": "Dépôt {name} enregistré", "Backup of {name}": "Sauvegarde de {name}", "Repository": "Dépôt",
+    "Daily copies kept": "Copies quotidiennes gardées", "Weekly copies kept": "Copies hebdomadaires gardées", "Monthly copies kept": "Copies mensuelles gardées",
+    "Older copies are forgotten and their data pruned after each run (restic forget --prune). Child datasets are not included: give each its own backup.":
+      "Les copies plus anciennes sont oubliées et leurs données purgées après chaque passage (restic forget --prune). Les datasets enfants ne sont pas inclus : donnez à chacun sa sauvegarde.",
+    "Backup of {name} saved": "Sauvegarde de {name} enregistrée", "Restore {name}": "Restaurer {name}", "No copy in the repository yet.": "Pas encore de copie dans le dépôt.",
+    "Copy": "Copie", "File or folder (empty: everything)": "Fichier ou dossier (vide : tout)", "e.g. 2025/invoices": "ex. 2025/factures",
+    "Into (a new folder inside a dataset)": "Dans (un nouveau dossier d'un dataset)",
+    "Nothing is overwritten: the folder must not exist yet. The restore runs in the background; its result shows here.": "Rien n'est écrasé : le dossier ne doit pas encore exister. La restauration tourne en arrière-plan ; son résultat s'affiche ici.",
+    "Restore started": "Restauration lancée", "Remove repository {name}": "Retirer le dépôt {name}",
+    "This machine forgets the repository and its password; the copies already in it stay where they are.": "Cette machine oublie le dépôt et son mot de passe ; les copies qu'il contient restent où elles sont.",
+    "Repository {name} removed": "Dépôt {name} retiré", "Stop the backup of {name}": "Arrêter la sauvegarde de {name}",
+    "No more copies are made; those already in the repository stay there.": "Plus aucune copie n'est faite ; celles déjà dans le dépôt y restent.",
+    "Backup of {name} stopped": "Sauvegarde de {name} arrêtée", "Backup of {name} started": "Sauvegarde de {name} lancée",
   },
 };
 

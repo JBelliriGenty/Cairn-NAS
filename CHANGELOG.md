@@ -9,6 +9,10 @@
 - Pools grow (`features.pools`): a new data group (less redundancy than the existing groups refused, never `-f`) or RAIDZ expansion by one disk (OpenZFS 2.3+), with its progress.
 - Pool export (refused while in use) and import of the pools `zpool import` lists (`features.pools`).
 - Pool properties in Storage: ashift, automatic trim (toggle, `features.vdevs`), ZFS features left to enable (`zpool upgrade` after a warning, `features.pools`), manual trim.
+- Snapshot restore (`features.restore`): browse a snapshot, download a file or a folder (tar, 4 GiB cap), copy it back next to the original (never overwritten), clone a snapshot into a new dataset, roll a dataset back (name retyped, newer snapshots listed; refused with clones, replication or iSCSI).
+- Schedules (`features.schedules`): automatic snapshot rotations per dataset and kept counts (driving `zfs-auto-snapshot`), weekly or monthly scrub per pool (OpenZFS timers), SMART short and long self-tests (systemd timers) with the last result per disk; alerts on a failed self-test or a scrub that found errors.
+- Native encryption (`features.encryption`): new encrypted datasets with a passphrase (stdin only, never stored) or a root-only key file, key status per dataset, unlock and lock from the page, unlock at boot for key-file datasets (`cairn-unlock.service`).
+- Off-site backups with restic (`features.offsite`): local, SFTP, S3 and B2 repositories (password and keys in root-only files, never returned), daily or weekly backup of a fresh snapshot per dataset with retention (`forget --prune`), last-run status and alerts, restore of a file or folder into a new folder.
 
 ## 0.1.0 (2026-11-05)
 

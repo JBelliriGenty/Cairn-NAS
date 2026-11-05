@@ -25,6 +25,11 @@ use std::ffi::{c_char, CStr, CString};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server};
 
+mod restore;
+mod schedules;
+mod encryption;
+mod offsite;
+
 const INDEX: &str = include_str!("../www/index.html");
 const JS: &str = include_str!("../www/panel.js");
 const CSS: &str = include_str!("../www/panel.css");
@@ -101,7 +106,7 @@ impl Config {
         let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
         public["recycle_days"] = json!(recycle_days); // the effective value, even when unset
         let f = |k: &str| v["features"][k].as_bool().unwrap_or(false);
-        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), vdevs: f("vdevs"), disks: f("disks"), replication: f("replication"), iscsi: f("iscsi") };
+        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), vdevs: f("vdevs"), disks: f("disks"), replication: f("replication"), iscsi: f("iscsi"), restore: f("restore"), schedules: f("schedules"), encryption: f("encryption"), offsite: f("offsite") };
         let firewall_table = v["firewall_table"].as_str().map(String::from);
         let l = &v["login"];
         let login = l.is_object().then(|| Login {
@@ -121,7 +126,7 @@ impl Config {
             capacity_pct: a["capacity_pct"].as_u64().unwrap_or(85),
             interval_s: a["interval_s"].as_u64().unwrap_or(300).max(60),
         });
-        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "vdevs": features.vdevs, "disks": features.disks, "replication": features.replication, "iscsi": features.iscsi,
+        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "vdevs": features.vdevs, "disks": features.disks, "replication": features.replication, "iscsi": features.iscsi, "restore": features.restore, "schedules": features.schedules, "encryption": features.encryption, "offsite": features.offsite,
             "firewall": firewall_table.is_some(), "login": login.is_some(), "autosnap": std::path::Path::new("/usr/sbin/zfs-auto-snapshot").exists()});
         Config {
             listen: s("listen", "127.0.0.1:9091"),
@@ -366,7 +371,7 @@ fn health() -> String {
             "passed": v["smart_status"]["passed"], "temp": v["temperature"]["current"], "hours": v["power_on_time"]["hours"],
             "used": h["percentage_used"], "spare": h["available_spare"], "spare_thr": h["available_spare_threshold"],
             "media_errors": h["media_errors"], "critical": h["critical_warning"], "written": h["data_units_written"],
-            "unsafe": h["unsafe_shutdowns"], "realloc": realloc,
+            "unsafe": h["unsafe_shutdowns"], "realloc": realloc, "selftest": schedules::last_selftest(&v),
         });
         out += &format!("{line}\n");
     }
@@ -517,7 +522,8 @@ fn tr(lang: &str, msg: &str) -> String {
     if lang != "fr" {
         return msg.to_string();
     }
-    FR.iter().find_map(|(en, fr)| fill(en, msg).map(|caps| {
+    // specific module messages first: FR has catch-alls such as "Pool {}: {}"
+    restore::FR.iter().chain(schedules::FR).chain(encryption::FR).chain(offsite::FR).chain(FR).find_map(|(en, fr)| fill(en, msg).map(|caps| {
         let mut out = String::new();
         for (i, part) in fr.split("{}").enumerate() {
             if i > 0 {
@@ -564,6 +570,9 @@ fn problems(cfg: &Config, capacity_pct: u64) -> BTreeMap<String, String> {
         let rows = last_sends(&cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,creation"]), &reps);
         replication_problems(&rows, now_s(), &mut out);
     }
+    if cfg.features.offsite {
+        offsite::problems(&load_manage(cfg), &mut out);
+    }
     let mut argv = vec!["systemctl", "is-active"];
     argv.extend(cfg.services.iter().map(String::as_str));
     // "failed" only: a service stopped on purpose (inactive) is not a problem.
@@ -592,6 +601,8 @@ fn pool_problems(list: &str, status: &str, capacity_pct: u64) -> BTreeMap<String
     for l in status.lines().map(str::trim) {
         if let Some(p) = l.strip_prefix("pool: ") {
             pool = p;
+        } else if let Some(n) = l.strip_prefix("scan: scrub repaired ").and_then(|r| r.split(" with ").nth(1)).and_then(|r| r.split(' ').next()).filter(|n| *n != "0") {
+            out.insert(format!("scrub:{pool}:{n}"), format!("Pool {pool}: last scrub found {n} errors"));
         } else if let Some(e) = l.strip_prefix("errors: ") {
             if e != "No known data errors" {
                 out.insert(format!("errors:{pool}:{e}"), format!("Pool {pool}: {e}"));
@@ -609,6 +620,10 @@ fn disk_problems(out: &mut BTreeMap<String, String>) {
         let who = format!("{dev} ({} {})", d["model"].as_str().unwrap_or(""), d["serial"].as_str().unwrap_or(""));
         if d["passed"] == false {
             out.insert(format!("smart:{dev}"), format!("Disk {who}: SMART self-test failed"));
+        }
+        let st = &d["selftest"];
+        if st["passed"] == false {
+            out.insert(format!("selftest:{dev}:{}", st["hours"]), format!("Disk {who}: last SMART self-test failed ({})", st["status"].as_str().unwrap_or("?")));
         }
         for (k, label) in [("critical", "NVMe critical warning"), ("media_errors", "media errors"), ("realloc", "reallocated sectors")] {
             if let Some(n) = d[k].as_u64().filter(|n| *n > 0) {
@@ -714,6 +729,14 @@ struct Features {
     disks: bool, // take pool members offline/online, replace them
     replication: bool, // let a backup machine pull this one, pull others (syncoid)
     iscsi: bool, // export volumes over iSCSI (LIO, targetcli)
+    restore: bool, // browse snapshots, restore files, clone, roll back
+    schedules: bool, // automatic snapshots per label, scrub and SMART self-test schedules
+    encryption: bool, // create encrypted datasets, lock and unlock them
+    offsite: bool, // restic repositories, backup jobs, restore
+}
+
+fn feature(on: bool) -> Result<(), String> {
+    if on { Ok(()) } else { Err("feature disabled on this server".into()) }
 }
 
 static MANAGE: Mutex<()> = Mutex::new(());
@@ -1053,7 +1076,10 @@ fn manage_view(cfg: &Config, lang: &str) -> Value {
         .map(|(name, gid, members)| json!({"name": name, "gid": gid, "owned": owned_groups.contains(name), "members": members}))
         .collect();
     json!({
-        "state": state, "users": users, "groups": groups, "mountpoints": mountpoints(), "admin_exports": admin_exports(),
+        "state": &state, "users": users, "groups": groups, "mountpoints": mountpoints(), "admin_exports": admin_exports(),
+        "schedules": if cfg.features.schedules { schedules::view(&state) } else { Value::Null },
+        "encryption": if cfg.features.encryption { encryption::view(&state) } else { Value::Null },
+        "offsite": if cfg.features.offsite { offsite::view(&state) } else { Value::Null },
         "free_disks": if cfg.features.pools || cfg.features.vdevs || cfg.features.disks { json!(free_disks()) } else { json!([]) },
         "alerts": cfg.alerts.as_ref().map(|a| json!({
             // Host only: the URL may carry a topic name, the headers a token.
@@ -1572,6 +1598,10 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&["systemctl", "start", "--no-block", "cairn-repl.service"], None)?;
             Ok("op=repl_run".into())
         }
+        "snap_restore" | "snap_clone" | "snap_rollback" => restore::manage_op(cfg, a, &state),
+        "autosnap_labels" | "autosnap_keep" | "scrub_every" | "smart_every" => schedules::manage_op(cfg, a, &mut state),
+        "enc_create" | "enc_unlock" | "enc_lock" | "enc_boot" => encryption::manage_op(cfg, a, &mut state),
+        "restic_repo_save" | "restic_repo_delete" | "restic_key" | "restic_job_save" | "restic_job_delete" | "restic_run" | "restic_restore" => offsite::manage_op(cfg, a, &mut state),
         _ => Err("unknown operation".into()),
     }
 }
@@ -2053,6 +2083,7 @@ fn in_use(state: &Value, exports: &[String], under: &[&Zrow]) -> Vec<String> {
     }
     out.extend(state["iscsi"].as_object().into_iter().flatten().filter(|(z, _)| names.contains(&z.as_str())).map(|(z, _)| format!("iscsi:{z}")));
     out.extend(state["repl_pull"].as_object().into_iter().flatten().filter(|(t, _)| names.contains(&t.as_str())).map(|(t, _)| format!("repl:{t}")));
+    out.extend(state["restic_jobs"].as_object().into_iter().flatten().filter(|(d, _)| names.contains(&d.as_str())).map(|(d, _)| format!("backup:{d}")));
     out
 }
 
@@ -2374,6 +2405,8 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg, lang).to_string(), "application/json"),
         // On demand only: zpool import reads the label of every disk.
         (Method::Get, "/api/importable") if cfg.features.pools => respond(r, 200, json!(parse_importable(&cmd(&["zpool", "import"]))).to_string(), "application/json"),
+        (Method::Get, "/api/browse" | "/api/download") if cfg.features.restore => restore::serve(r, &path, lang),
+        (Method::Get, "/api/backups") if cfg.features.offsite => offsite::serve(cfg, r, lang),
         (Method::Post, "/api/manage") => {
             if !header(&r, "Content-Type").starts_with("application/json") {
                 return respond(r, 400, err("invalid request"), "application/json");
@@ -2475,6 +2508,8 @@ fn demo(mut r: Request) {
         (Method::Get, "/api/slow") => respond(r, 200, include_str!("../demo/slow.txt").into(), "text/plain"),
         (Method::Get, "/api/manage") => respond(r, 200, include_str!("../demo/manage.json").into(), jsn),
         (Method::Get, "/api/importable") => respond(r, 200, json!(parse_importable(include_str!("../demo/import.txt"))).to_string(), jsn),
+        (Method::Get, "/api/browse" | "/api/download") => restore::demo_serve(r, &path),
+        (Method::Get, "/api/backups") => offsite::demo_serve(r),
         (Method::Post, "/api/ui") => {
             let mut body = String::new();
             let _ = r.as_reader().take(65536).read_to_string(&mut body);
@@ -2496,6 +2531,15 @@ fn main() {
     if path == "--pull" {
         let cfg = Config::load(&std::env::args().nth(2).expect("usage: cairn-nas --pull /etc/cairn-nas.json"));
         std::process::exit(pull(&cfg));
+    }
+    if path == "--backup" || path == "--restore" {
+        // --backup <daily|weekly|dataset> <config>, --restore <dataset> <id> <path> <target> <config> (systemd units)
+        let mut args: Vec<String> = std::env::args().skip(2).collect();
+        let cfg = Config::load(&args.pop().expect("usage: cairn-nas --backup|--restore ... /etc/cairn-nas.json"));
+        std::process::exit(if path == "--backup" { offsite::backup_cli(&cfg, args.first().map_or("", String::as_str)) } else { offsite::restore_cli(&cfg, &args) });
+    }
+    if path == "--selftest" {
+        std::process::exit(schedules::selftest_cli(&std::env::args().nth(2).unwrap_or_default()));
     }
     if path == "--demo" {
         let listen = std::env::args().nth(2).unwrap_or("127.0.0.1:8080".into());
@@ -2658,6 +2702,10 @@ mod tests {
         let p = pool_problems(list, status, 85);
         assert_eq!(p.keys().cloned().collect::<Vec<_>>(), ["errors:tank:2 data errors, use '-v' for a list", "full:tank", "pool:tank:DEGRADED"]);
         assert!(pool_problems("fast\tONLINE\t12%\n", "  pool: fast\nerrors: No known data errors\n", 85).is_empty());
+        let scrub = "  pool: fast\n  scan: scrub repaired 0B in 00:10:02 with 3 errors on Sun Nov  8 00:34:03 2026\nerrors: No known data errors\n";
+        assert_eq!(pool_problems("", scrub, 85).values().collect::<Vec<_>>(), ["Pool fast: last scrub found 3 errors"]);
+        assert!(pool_problems("", &scrub.replace("with 3", "with 0"), 85).is_empty());
+        assert_eq!(tr("fr", "Pool fast: last scrub found 3 errors"), "Pool fast : le dernier scrub a trouvé 3 erreurs");
     }
 
     #[test]

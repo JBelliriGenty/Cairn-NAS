@@ -51,8 +51,106 @@ pools, growing, exporting, importing and upgrading pools (`features.pools`,
 see below); log, cache and spare devices and trim (`features.vdevs`);
 replacing a pool's disks
 (`features.disks`); pull replication between two Cairn machines
-(`features.replication`); iSCSI export of volumes (`features.iscsi`), see
-below.
+(`features.replication`); iSCSI export of volumes (`features.iscsi`);
+snapshot restore (`features.restore`); snapshot, scrub and SMART
+self-test schedules (`features.schedules`); native encryption
+(`features.encryption`); off-site backups with restic (`features.offsite`),
+see below.
+
+## Snapshot restore (`features.restore`)
+
+In **Storage**, *Restore…* on a dataset or volume that has snapshots: pick
+one (automatic ones included), then:
+
+- *Browse it* (datasets only): its folders as they were, read-only from
+  `<mountpoint>/.zfs/snapshot/<name>`. *Download* a file, or a folder as a
+  `.tar`, up to 4 GiB; *Restore* copies the file or folder back into the
+  dataset next to the original, as `<name>.restored-<snapshot>`: nothing is
+  ever overwritten, and an existing copy of that name is refused. Paths are
+  resolved on the server (symlinks and `..` included) and must stay inside
+  the snapshot.
+- *Clone it* into a new dataset of the same pool (`zfs clone`): a writable
+  copy sharing its blocks; the snapshot cannot be deleted while it exists.
+- *Roll the dataset back* (`zfs rollback`): everything written since is
+  lost. The dataset name must be typed again and the page lists the newer
+  snapshots destroyed with it (`-r`). Refused when a newer snapshot has a
+  clone (that would need `-R`), and while a replication (either side, or a
+  replicated parent) or an iSCSI export uses the dataset.
+
+## Schedules (`features.schedules`)
+
+Nothing changes until a schedule is edited in the page.
+
+- **Automatic snapshots** (with `features.autosnap`): Cairn drives the
+  existing `zfs-auto-snapshot` package, no second snapshot tool. *Edit* on a
+  dataset ticks the rotations it takes part in (every 15 min, hourly,
+  daily, weekly, monthly), written as `com.sun:auto-snapshot` and
+  `com.sun:auto-snapshot:<label>` properties (inherited by children). The
+  card above the snapshots sets how many of each are kept: the `--keep=` of
+  `/etc/cron.d/zfs-auto-snapshot` and `/etc/cron.{hourly,daily,weekly,monthly}/zfs-auto-snapshot`,
+  for the whole machine. A replication pulling from the machine needs its
+  last copied snapshot to survive the rotation.
+- **Scrub** per pool, weekly or monthly, through the OpenZFS timers
+  `zfs-scrub-weekly@<pool>.timer` / `zfs-scrub-monthly@<pool>.timer`
+  (Debian's own monthly scrub in `/etc/cron.d/zfsutils-linux` is left alone).
+  The pool card shows the schedule; a scrub that found errors raises an alert.
+- **SMART self-tests**: short (daily or weekly) and long (weekly or
+  monthly) tests of every disk at 01:30, through the units
+  `cairn-smart-{short,long}.{service,timer}` that run `cairn-nas --selftest
+  short|long`. Each disk card shows the last self-test result; a failed one
+  raises an alert.
+
+## Native encryption (`features.encryption`)
+
+In **Storage**, *New encrypted dataset* creates a dataset with ZFS native
+encryption (`encryption=on`) under an existing one, keyed either by a
+**passphrase** (asked at each unlock, sent to `zfs` on stdin, never stored
+nor logged) or by a **key file** of 32 random bytes,
+`/etc/cairn-nas/keys/<dataset with / as _>.key` (directory 0700, file
+0600, root only). Existing datasets cannot be encrypted in place: create an
+encrypted one and copy the data into it.
+
+The *Encryption* column shows each encrypted dataset's key status and, on
+its encryption root, *Unlock* (`zfs load-key`, then mounts its file systems)
+or *Lock* (`zfs unmount -u`: unmounts them and forgets the key; refused
+while a share, a replication, an iSCSI export or an off-site backup uses
+them). Key-file datasets can be unlocked at boot: the unit
+`cairn-unlock.service` loads their keys before `zfs-mount.service` (Debian
+masks `zfs-load-key.service`). Passphrase datasets stay locked after a
+reboot until unlocked from the page. A key file protects disks taken out of
+the machine, not the machine itself; a lost passphrase or key file means
+lost data.
+
+## Off-site backup with restic (`features.offsite`)
+
+Needs `restic` (`apt install restic`). In **Backup**:
+
+- **Repositories**: a local folder or disk (`/path`), an SFTP server
+  (`user@host:/path`, with this machine's own key `/var/lib/cairn-nas/restic_ed25519`,
+  created from the page, to add to the server's `authorized_keys`), S3-compatible
+  storage (`https://endpoint/bucket/path`) or Backblaze B2 (`bucket:path`).
+  An existing repository with the same password is used as it is, otherwise
+  it is created (`restic init`). The password and the access keys go to
+  root-only files, `/etc/cairn-nas/restic/<name>.pass` and `.env` (directory
+  0700, files 0600), and are never returned by the API. Removing a
+  repository only removes this machine's access, never the copies.
+- **Backups**, one per dataset: daily (04:00) or weekly (Sunday 04:00),
+  through `cairn-backup-{daily,weekly}.{service,timer}` running
+  `cairn-nas --backup <every> <config>`. Each run takes a fresh snapshot
+  `<dataset>@cairn-restic-<time>`, bind-mounts it read-only on the stable
+  path `/run/cairn-nas/restic/<dataset>` (so restic finds the previous copy
+  and only reads changed files), backs it up tagged with the dataset name,
+  releases the snapshot, then applies the retention
+  (`forget --prune --keep-daily/--keep-weekly/--keep-monthly`). Child
+  datasets are not included. The last run of each job is shown
+  (`/var/lib/cairn-nas/restic-status.json`); a failed run, or no successful
+  run for 26 h (daily) or 8 days (weekly), raises an alert. *Run now* starts
+  one in the background.
+- **Restore**: a copy, a file or folder of it (or everything), into a new
+  folder inside a dataset; nothing is overwritten.
+
+A dataset with a backup cannot be deleted or locked until its backup is
+stopped.
 
 ## Datasets, volumes and pools (`features.pools`)
 
@@ -204,7 +302,7 @@ with your own if you have one.
 | `tls` | `{cert, key}` (PEM): HTTPS, required with `login` |
 | `trusted_proxies`, `user_header`, `groups_header`, `require_groups` | proxy mode |
 | `services` | systemd units shown and restartable |
-| `features` | `{nfs, smb, users, pools, vdevs, disks, replication, iscsi}`: allowed writes |
+| `features` | `{nfs, smb, users, pools, vdevs, disks, replication, iscsi, restore, schedules, encryption, offsite}`: allowed writes |
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
 | `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in the Backup view (and an Overview tile) with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |
