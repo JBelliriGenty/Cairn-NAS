@@ -2,6 +2,8 @@
 
 # Cairn (`cairn-nas`)
 
+[![CI](https://github.com/JBelliriGenty/Cairn-NAS/actions/workflows/ci.yml/badge.svg)](https://github.com/JBelliriGenty/Cairn-NAS/actions/workflows/ci.yml)
+
 A web admin panel for a small **Debian + ZFS** NAS. One Rust binary with the
 page embedded: no database, no third-party JavaScript, a few MB of RAM.
 
@@ -46,16 +48,26 @@ Demo data.
 Optional (off by default): creating datasets and pools on blank disks
 (`features.pools`).
 
+## Try it
+
+`cairn-nas --demo` serves the page on sample data at `http://127.0.0.1:8080`
+(or `--demo <address:port>`): no root, no ZFS needed, nothing is changed.
+
 ## Install (standalone mode)
 
-Debian 13 with ZFS already set up (`zfsutils-linux`), as root:
+Debian 13 with ZFS already set up (`zfsutils-linux`), as root, from the
+[latest release](https://github.com/JBelliriGenty/Cairn-NAS/releases/latest)
+(x86_64):
 
 ```sh
-git clone https://github.com/JBelliriGenty/Cairn-NAS.git
-cd Cairn-NAS
+tar xzf cairn-nas-v*-x86_64-linux.tar.gz
+cd cairn-nas-v*-x86_64-linux
 sh install.sh
 usermod -aG nas-admin <your-account>
 ```
+
+Or from source (builds with Debian's `cargo`): `git clone` this repository and
+run `sh install.sh` in it.
 
 Then open `https://<address>:8443` and sign in with that system account. The
 certificate is self-signed: replace `/etc/cairn-nas/cert.pem` and `key.pem`
@@ -153,6 +165,9 @@ cargo test --release --locked
 
 Rust from Debian 13 (`cargo` 1.85) is enough. `DESIGN.md` describes the
 visual design.
+
+Each push runs the tests on GitHub Actions; a `vX.Y.Z` tag publishes a
+release with the binary (see `CHANGELOG.md`). Security reports: `SECURITY.md`.
 
 ## License
 

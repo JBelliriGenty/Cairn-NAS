@@ -383,6 +383,7 @@ const FR: &[(&str, &str)] = &[
     ("wrong user name or password", "identifiant ou mot de passe incorrect"),
     ("access denied", "accès refusé"),
     ("invalid labels", "étiquettes invalides"),
+    ("demo mode: nothing is changed", "mode démo : rien n'est modifié"),
     ("not found", "introuvable"),
 ];
 
@@ -1628,8 +1629,68 @@ fn handle(cfg: &Config, mut r: Request) {
     }
 }
 
+/* ---------- demo ---------- */
+
+/// `cairn-nas --demo [addr]`: the page on recorded sample data, no root, no
+/// sign-in, nothing written (labels and tags are kept in memory only).
+const DEMO_FAST: [&str; 8] = [
+    include_str!("../demo/fast1.txt"), include_str!("../demo/fast2.txt"), include_str!("../demo/fast3.txt"), include_str!("../demo/fast4.txt"),
+    include_str!("../demo/fast5.txt"), include_str!("../demo/fast6.txt"), include_str!("../demo/fast7.txt"), include_str!("../demo/fast8.txt"),
+];
+static DEMO_UI: Mutex<Option<Value>> = Mutex::new(None);
+static DEMO_TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn demo(mut r: Request) {
+    let path = r.url().split('?').next().unwrap_or("").to_string();
+    let lang = if header(&r, "Accept-Language").starts_with("fr") { "fr" } else { "en" };
+    let jsn = "application/json";
+    match (r.method().clone(), path.as_str()) {
+        (Method::Get, "/") => respond(r, 200, INDEX.into(), "text/html"),
+        (Method::Get, "/panel.js") => respond(r, 200, JS.into(), "text/javascript"),
+        (Method::Get, "/panel.css") => respond(r, 200, CSS.into(), "text/css"),
+        (Method::Get, "/i18n.js") => respond(r, 200, I18N.into(), "text/javascript"),
+        (Method::Get, "/icon.svg") => respond(r, 200, ICON.into(), "image/svg+xml"),
+        (Method::Get, "/api/config") => {
+            let mut c: Value = serde_json::from_str(include_str!("../demo/config.json")).unwrap_or_default();
+            c["user"] = json!("demo");
+            if let Some(ui) = DEMO_UI.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                c["ui"] = ui;
+            }
+            respond(r, 200, c.to_string(), jsn)
+        }
+        (Method::Get, "/api/fast") => {
+            let i = DEMO_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            respond(r, 200, DEMO_FAST[i % DEMO_FAST.len()].into(), "text/plain")
+        }
+        (Method::Get, "/api/slow") => respond(r, 200, include_str!("../demo/slow.txt").into(), "text/plain"),
+        (Method::Get, "/api/manage") => respond(r, 200, include_str!("../demo/manage.json").into(), jsn),
+        (Method::Post, "/api/ui") => {
+            let mut body = String::new();
+            let _ = r.as_reader().take(65536).read_to_string(&mut body);
+            match serde_json::from_str::<Value>(&body) {
+                Ok(v) if valid_ui(&v) => {
+                    *DEMO_UI.lock().unwrap_or_else(|e| e.into_inner()) = Some(v);
+                    respond(r, 200, json!({"ok": true}).to_string(), jsn)
+                }
+                _ => respond(r, 400, json!({"error": tr(lang, "invalid labels")}).to_string(), jsn),
+            }
+        }
+        (Method::Post, _) => respond(r, 400, json!({"error": tr(lang, "demo mode: nothing is changed")}).to_string(), jsn),
+        _ => respond(r, 404, tr(lang, "not found"), "text/plain"),
+    }
+}
+
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: cairn-nas /etc/cairn-nas.json");
+    let path = std::env::args().nth(1).expect("usage: cairn-nas /etc/cairn-nas.json | --demo [address:port]");
+    if path == "--demo" {
+        let listen = std::env::args().nth(2).unwrap_or("127.0.0.1:8080".into());
+        let server = Server::http(&listen).expect("cannot listen");
+        eprintln!("cairn-nas demo on http://{listen}");
+        for r in server.incoming_requests() {
+            std::thread::spawn(move || demo(r));
+        }
+        return;
+    }
     let cfg: &'static Config = Box::leak(Box::new(Config::load(&path)));
     let server = match &cfg.tls {
         Some((cert, key)) => Server::https(&cfg.listen, tiny_http::SslConfig {

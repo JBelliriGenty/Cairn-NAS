@@ -1,0 +1,274 @@
+NAS
+6.12.115+deb13.1-amd64
+@@
+fast	health	ONLINE	-
+fast	size	3985729650688	-
+fast	allocated	122459185152	-
+fast	free	3863270465536	-
+fast	fragmentation	1	-
+fast	capacity	3	-
+tank	health	ONLINE	-
+tank	size	20478404067328	-
+tank	allocated	505079054336	-
+tank	free	19973325012992	-
+tank	fragmentation	0	-
+tank	capacity	2	-
+@@
+  pool: fast
+ state: ONLINE
+config:
+
+	NAME                                           STATE     READ WRITE CKSUM
+	fast                                           ONLINE       0     0     0
+	  raidz1-0                                     ONLINE       0     0     0
+	    nvme-Fanxiang_S690Q_1TB_DEMO0006  ONLINE       0     0     0
+	    nvme-Fanxiang_S690Q_1TB_DEMO0007  ONLINE       0     0     0
+	    nvme-Fanxiang_S690Q_1TB_DEMO0008  ONLINE       0     0     0
+	    nvme-Fanxiang_S690Q_1TB_DEMO0009  ONLINE       0     0     0
+
+errors: No known data errors
+
+  pool: tank
+ state: ONLINE
+config:
+
+	NAME                            STATE     READ WRITE CKSUM
+	tank                            ONLINE       0     0     0
+	  raidz1-0                      ONLINE       0     0     0
+	    ata-ORICO_DEMO0001  ONLINE       0     0     0
+	    ata-ORICO_DEMO0002  ONLINE       0     0     0
+	    ata-ORICO_DEMO0003  ONLINE       0     0     0
+	    ata-ORICO_DEMO0004  ONLINE       0     0     0
+	    ata-ORICO_DEMO0005  ONLINE       0     0     0
+
+errors: No known data errors
+@@
+fast	88974251712	2716801214784	154752	1.71	lz4	131072	0	/fast	true
+fast/vm	88955520768	2716801214784	88955520768	1.71	lz4	1048576	0	/fast/vm	true
+tank	403471334320	15817814836304	196320	1.02	lz4	131072	0	/tank	true
+tank/projects	662756688	15817814836304	662651984	1.00	lz4	131072	0	/tank/projects	true
+tank/backups	284249705904	15817814836304	284249483408	1.03	lz4	1048576	0	/tank/backups	false
+tank/musique	33625395120	15817814836304	33625395120	1.00	lz4	1048576	0	/tank/musique	true
+tank/photos	69425583936	15817814836304	69417907824	1.01	lz4	131072	0	/tank/photos	true
+tank/documents	47751568	15817814836304	47751568	1.04	lz4	131072	0	/tank/documents	true
+tank/homes	248672	15817814836304	248672	1.34	lz4	131072	0	/tank/homes	true
+tank/multimedia	15450757008	15817814836304	15450757008	1.03	lz4	1048576	0	/tank/multimedia	true
+tank/public	157056	15817814836304	157056	1.00	lz4	131072	0	/tank/public	true
+tank/web	163600	15817814836304	163600	1.00	lz4	131072	0	/tank/web	true
+@@
+fast@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+fast@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+fast@mig1	0	1793702782
+fast@mig2	0	1793703246
+fast@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+fast@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704501
+fast@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+fast@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+fast@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+fast/vm@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+fast/vm@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+fast/vm@mig1	0	1793702782
+fast/vm@mig2	0	1793703246
+fast/vm@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+fast/vm@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+fast/vm@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+fast/vm@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+fast/vm@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/projects@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/projects@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/projects@mig1	0	1793702782
+tank/projects@mig2	0	1793703246
+tank/projects@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/projects@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/projects@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/projects@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/projects@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/backups@mig1	0	1793702782
+tank/backups@mig2	0	1793703246
+tank/musique@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/musique@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/musique@mig1	0	1793702782
+tank/musique@mig2	0	1793703246
+tank/musique@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/musique@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/musique@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/musique@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/musique@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/photos@zfs-auto-snap_daily-2026-11-03-0927	3703904	1793698064
+tank/photos@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/photos@mig1	0	1793702782
+tank/photos@mig2	0	1793703246
+tank/photos@zfs-auto-snap_frequent-2026-11-03-1100	157056	1793703601
+tank/photos@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/photos@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/photos@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/photos@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/documents@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/documents@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/documents@mig1	0	1793702782
+tank/documents@mig2	0	1793703246
+tank/documents@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/documents@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/documents@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/documents@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/documents@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/homes@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/homes@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/homes@mig1	0	1793702782
+tank/homes@mig2	0	1793703246
+tank/homes@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/homes@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/homes@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/homes@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/homes@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/multimedia@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/multimedia@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/multimedia@mig1	0	1793702782
+tank/multimedia@mig2	0	1793703246
+tank/multimedia@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/multimedia@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/multimedia@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/multimedia@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/multimedia@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/public@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/public@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/public@mig1	0	1793702782
+tank/public@mig2	0	1793703246
+tank/public@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/public@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/public@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/public@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/public@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+tank/web@zfs-auto-snap_daily-2026-11-03-0927	0	1793698064
+tank/web@zfs-auto-snap_hourly-2026-11-03-1017	0	1793701021
+tank/web@mig1	0	1793702782
+tank/web@mig2	0	1793703246
+tank/web@zfs-auto-snap_frequent-2026-11-03-1100	0	1793703601
+tank/web@zfs-auto-snap_frequent-2026-11-03-1115	0	1793704502
+tank/web@zfs-auto-snap_hourly-2026-11-03-1117	0	1793704621
+tank/web@zfs-auto-snap_frequent-2026-11-03-1130	0	1793705401
+tank/web@zfs-auto-snap_frequent-2026-11-03-1145	0	1793706302
+@@
+0      0      192.168.10.41:2049 192.168.10.54:987 
+0      0      192.168.10.41:2049 192.168.10.51:679 
+0      0      192.168.10.41:2049 192.168.10.45:1000
+0      0      192.168.10.41:2049 192.168.10.53:824 
+0      0      192.168.10.41:2049 192.168.10.76:715 
+@@
+nfs-server active
+zfs-zed active
+nftables active
+chrony active
+cron active
+@@
+[{"ifindex":1,"ifname":"lo","flags":["LOOPBACK","UP","LOWER_UP"],"mtu":65536,"qdisc":"noqueue","operstate":"UNKNOWN","group":"default","txqlen":1000,"link_type":"loopback","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","addr_info":[{"family":"inet","local":"127.0.0.1","prefixlen":8,"scope":"host","label":"lo","valid_life_time":4294967295,"preferred_life_time":4294967295},{"family":"inet6","local":"::1","prefixlen":128,"scope":"host","noprefixroute":true,"valid_life_time":4294967295,"preferred_life_time":4294967295}]},{"ifindex":2,"ifname":"enp94s0","flags":["NO-CARRIER","BROADCAST","MULTICAST","UP"],"mtu":1500,"qdisc":"mq","operstate":"DOWN","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx00e04ca69214"],"addr_info":[]},{"ifindex":3,"ifname":"enp95s0","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,"qdisc":"mq","operstate":"UP","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx00e04ca69215"],"addr_info":[{"family":"inet","local":"192.168.10.41","prefixlen":24,"broadcast":"192.168.10.255","scope":"global","dynamic":true,"noprefixroute":true,"label":"enp95s0","valid_life_time":46110,"preferred_life_time":46110},{"family":"inet6","local":"fe80::2e0:4cff:fea6:9215","prefixlen":64,"scope":"link","noprefixroute":true,"valid_life_time":4294967295,"preferred_life_time":4294967295}]},{"ifindex":4,"ifname":"enp96s0","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,"qdisc":"mq","operstate":"UP","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx88c9b3b3537a"],"addr_info":[]},{"ifindex":5,"ifname":"enp7s0f0np0","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,"qdisc":"mq","operstate":"UP","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx98b785256485"],"addr_info":[]},{"ifindex":6,"ifname":"enp7s0f1np1","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,"qdisc":"mq","operstate":"UP","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx98b785256486"],"addr_info":[]},{"ifindex":7,"ifname":"enp7s0f2np2","flags":["NO-CARRIER","BROADCAST","MULTICAST","UP"],"mtu":1500,"qdisc":"mq","operstate":"DOWN","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx98b785256487"],"addr_info":[]},{"ifindex":8,"ifname":"enp7s0f3np3","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"mtu":1500,"qdisc":"mq","operstate":"UP","group":"default","txqlen":1000,"link_type":"ether","address":"02:00:00:00:00:01","broadcast":"02:00:00:00:00:01","altnames":["enx98b785256488"],"addr_info":[]}]
+@@
+enp7s0f0np0 10000
+enp7s0f1np1 10000
+enp7s0f2np2 -1
+enp7s0f3np3 10000
+enp94s0 -1
+enp95s0 1000
+enp96s0 10000
+@@
+nvme0n1|Fanxiang S690Q 1TB
+nvme1n1|Fanxiang S690Q 1TB
+nvme2n1|Fanxiang S690Q 1TB
+nvme3n1|Fanxiang S690Q 1TB
+nvme4n1|KINGSTON OM8PGP4256Q-A0
+sda|ORICO
+sdb|ORICO
+sdc|ORICO
+sdd|ORICO
+sde|ORICO
+@@
+/tank/photos 192.168.10.51(rw,no_root_squash,no_subtree_check) 192.168.10.53(rw,no_root_squash,no_subtree_check) 192.168.10.54(rw,no_root_squash,no_subtree_check)
+/tank/backups 192.168.10.51(rw,no_root_squash,no_subtree_check) 192.168.10.53(rw,no_root_squash,no_subtree_check) 192.168.10.54(rw,no_root_squash,no_subtree_check)
+/fast/vm 192.168.10.51(rw,no_root_squash,no_subtree_check) 192.168.10.53(rw,no_root_squash,no_subtree_check) 192.168.10.54(rw,no_root_squash,no_subtree_check)
+/tank/documents 192.168.10.51(rw,no_root_squash,no_subtree_check) 192.168.10.53(rw,no_root_squash,no_subtree_check) 192.168.10.54(rw,no_root_squash,no_subtree_check) 192.168.10.45(rw,no_root_squash,no_subtree_check)
+/tank/projects 192.168.10.76(rw,no_root_squash,no_subtree_check)
+@@
+ata-ORICO_DEMO0001-part1|sdd1
+ata-ORICO_DEMO0001-part9|sdd9
+ata-ORICO_DEMO0001|sdd
+ata-ORICO_DEMO0002-part1|sda1
+ata-ORICO_DEMO0002-part9|sda9
+ata-ORICO_DEMO0002|sda
+ata-ORICO_DEMO0003-part1|sdc1
+ata-ORICO_DEMO0003-part9|sdc9
+ata-ORICO_DEMO0003|sdc
+ata-ORICO_DEMO0004-part1|sde1
+ata-ORICO_DEMO0004-part9|sde9
+ata-ORICO_DEMO0004|sde
+ata-ORICO_DEMO0005-part1|sdb1
+ata-ORICO_DEMO0005-part9|sdb9
+ata-ORICO_DEMO0005|sdb
+dm-name-NAS--vg-root|dm-0
+dm-name-NAS--vg-swap_1|dm-1
+dm-uuid-LVM-JddK6NhS6dc2yXrFqwupi8zOHGUtBsBOiUl1pXwsM4i3qf9fJwCzA8Jp1iJ0OfcS|dm-1
+dm-uuid-LVM-JddK6NhS6dc2yXrFqwupi8zOHGUtBsBOk35Fjok5uMtAz2chD0bKekB2AaWxdKyt|dm-0
+lvm-pv-uuid-M1HHQV-0Y5V-T1J6-t8dm-2fBE-lGL9-hs3CeX|nvme4n1p3
+nvme-Fanxiang_S690Q_1TB_DEMO0009-part1|nvme3n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0009-part9|nvme3n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0009_1-part1|nvme3n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0009_1-part9|nvme3n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0009_1|nvme3n1
+nvme-Fanxiang_S690Q_1TB_DEMO0009|nvme3n1
+nvme-Fanxiang_S690Q_1TB_DEMO0008-part1|nvme2n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0008-part9|nvme2n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0008_1-part1|nvme2n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0008_1-part9|nvme2n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0008_1|nvme2n1
+nvme-Fanxiang_S690Q_1TB_DEMO0008|nvme2n1
+nvme-Fanxiang_S690Q_1TB_DEMO0007-part1|nvme1n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0007-part9|nvme1n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0007_1-part1|nvme1n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0007_1-part9|nvme1n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0007_1|nvme1n1
+nvme-Fanxiang_S690Q_1TB_DEMO0007|nvme1n1
+nvme-Fanxiang_S690Q_1TB_DEMO0006-part1|nvme0n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0006-part9|nvme0n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0006_1-part1|nvme0n1p1
+nvme-Fanxiang_S690Q_1TB_DEMO0006_1-part9|nvme0n1p9
+nvme-Fanxiang_S690Q_1TB_DEMO0006_1|nvme0n1
+nvme-Fanxiang_S690Q_1TB_DEMO0006|nvme0n1
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55-part1|nvme4n1p1
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55-part2|nvme4n1p2
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55-part3|nvme4n1p3
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55_1-part1|nvme4n1p1
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55_1-part2|nvme4n1p2
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55_1-part3|nvme4n1p3
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55_1|nvme4n1
+nvme-KINGSTON_OM8PGP4256Q-A0_50026B7384371E55|nvme4n1
+nvme-eui.00000000000000000026b7384371e555-part1|nvme4n1p1
+nvme-eui.00000000000000000026b7384371e555-part2|nvme4n1p2
+nvme-eui.00000000000000000026b7384371e555-part3|nvme4n1p3
+nvme-eui.00000000000000000026b7384371e555|nvme4n1
+nvme-eui.00000000000000000c82d58552000045-part1|nvme3n1p1
+nvme-eui.00000000000000000c82d58552000045-part9|nvme3n1p9
+nvme-eui.00000000000000000c82d58552000045|nvme3n1
+nvme-eui.00000000000000000c82d58552000183-part1|nvme2n1p1
+nvme-eui.00000000000000000c82d58552000183-part9|nvme2n1p9
+nvme-eui.00000000000000000c82d58552000183|nvme2n1
+nvme-eui.00000000000000000c82d58552000221-part1|nvme1n1p1
+nvme-eui.00000000000000000c82d58552000221-part9|nvme1n1p9
+nvme-eui.00000000000000000c82d58552000221|nvme1n1
+nvme-eui.00000000000000000c82d58552000296-part1|nvme0n1p1
+nvme-eui.00000000000000000c82d58552000296-part9|nvme0n1p9
+nvme-eui.00000000000000000c82d58552000296|nvme0n1
+@@
+{"capacity":1000204886016,"critical":0,"dev":"nvme0n1","hours":2,"media_errors":0,"model":"Fanxiang S690Q 1TB","passed":true,"realloc":null,"serial":"25121508552000296","spare":100,"spare_thr":1,"temp":42,"unsafe":6,"used":0,"written":362622}
+{"capacity":1000204886016,"critical":0,"dev":"nvme1n1","hours":2,"media_errors":0,"model":"Fanxiang S690Q 1TB","passed":true,"realloc":null,"serial":"25121508552000221","spare":100,"spare_thr":1,"temp":44,"unsafe":6,"used":0,"written":362503}
+{"capacity":1000204886016,"critical":0,"dev":"nvme2n1","hours":2,"media_errors":0,"model":"Fanxiang S690Q 1TB","passed":true,"realloc":null,"serial":"25121508552000183","spare":100,"spare_thr":1,"temp":41,"unsafe":6,"used":0,"written":362623}
+{"capacity":1000204886016,"critical":0,"dev":"nvme3n1","hours":2,"media_errors":0,"model":"Fanxiang S690Q 1TB","passed":true,"realloc":null,"serial":"25121508552000045","spare":100,"spare_thr":1,"temp":43,"unsafe":6,"used":0,"written":362505}
+{"capacity":256060514304,"critical":0,"dev":"nvme4n1","hours":4,"media_errors":0,"model":"KINGSTON OM8PGP4256Q-A0","passed":true,"realloc":null,"serial":"50026B7384371E55","spare":100,"spare_thr":10,"temp":34,"unsafe":8,"used":0,"written":255172}
+{"capacity":4096805658624,"critical":null,"dev":"sda","hours":11094,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"HE5M62G259VNW4FB","spare":null,"spare_thr":null,"temp":26,"unsafe":null,"used":null,"written":null}
+{"capacity":4096805658624,"critical":null,"dev":"sdb","hours":11092,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"VRZ9ZGWOMM7JDN91","spare":null,"spare_thr":null,"temp":26,"unsafe":null,"used":null,"written":null}
+{"capacity":4096805658624,"critical":null,"dev":"sdc","hours":11099,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"NA2T369V2NP667LV","spare":null,"spare_thr":null,"temp":25,"unsafe":null,"used":null,"written":null}
+{"capacity":4096805658624,"critical":null,"dev":"sdd","hours":11076,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"8MYIJURYNM53T6ZY","spare":null,"spare_thr":null,"temp":27,"unsafe":null,"used":null,"written":null}
+{"capacity":4096805658624,"critical":null,"dev":"sde","hours":11117,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"VPY9D8DWA2CLYRWS","spare":null,"spare_thr":null,"temp":26,"unsafe":null,"used":null,"written":null}

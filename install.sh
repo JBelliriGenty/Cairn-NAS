@@ -1,6 +1,7 @@
 #!/bin/sh
 # cairn-nas installer for Debian 13 + ZFS, standalone mode (built-in sign-in
-# over HTTPS). Run as root from this directory: sh install.sh
+# over HTTPS). Run as root from this directory (release archive or source
+# checkout): sh install.sh
 # Idempotent: an existing config, certificate or smb.conf include is kept.
 set -eu
 
@@ -9,12 +10,17 @@ command -v zpool >/dev/null || { echo "ZFS (zfsutils-linux) is required" >&2; ex
 cd "$(dirname "$0")"
 
 echo "== packages"
-apt-get install -y cargo libssl-dev pkg-config openssl smartmontools \
-  samba nfs-kernel-server zfs-auto-snapshot avahi-daemon
+apt-get install -y openssl smartmontools samba nfs-kernel-server zfs-auto-snapshot avahi-daemon
 
-echo "== build"
-cargo build --release --locked
-install -m 0755 target/release/cairn-nas /usr/local/bin/cairn-nas
+# A release archive ships the binary next to this script; a source checkout builds it.
+if [ -f cairn-nas ]; then
+  install -m 0755 cairn-nas /usr/local/bin/cairn-nas
+else
+  echo "== build"
+  apt-get install -y cargo libssl-dev pkg-config
+  cargo build --release --locked
+  install -m 0755 target/release/cairn-nas /usr/local/bin/cairn-nas
+fi
 
 echo "== admin group"
 getent group nas-admin >/dev/null || groupadd nas-admin

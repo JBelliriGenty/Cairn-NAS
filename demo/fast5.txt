@@ -1,0 +1,136 @@
+cpu  566862 1566 530246 40120031 141498 0 88936 0 0 0
+cpu0 107625 199 88348 3212733 20519 0 308 0 0 0
+cpu1 17187 142 25148 3414013 7748 0 111 0 0 0
+cpu2 130645 240 89138 3168936 23449 0 21485 0 0 0
+cpu3 27702 329 30803 3396125 5804 0 2784 0 0 0
+cpu4 67114 106 60672 3254179 15784 0 37010 0 0 0
+cpu5 79387 84 73221 3279323 12046 0 4913 0 0 0
+cpu6 75220 82 43356 3335079 9695 0 3 0 0 0
+cpu7 21055 54 37896 3354721 10427 0 17362 0 0 0
+cpu8 10786 99 20912 3428756 6844 0 107 0 0 0
+cpu9 11312 71 22391 3414306 11254 0 4096 0 0 0
+cpu10 9449 73 19829 3429622 8470 0 735 0 0 0
+cpu11 9376 83 18529 3432232 9453 0 17 0 0 0
+@@
+MemTotal:       16110624 kB
+MemFree:         1569504 kB
+MemAvailable:    3543348 kB
+Buffers:           31924 kB
+Cached:          2058716 kB
+SwapCached:         2672 kB
+Active:          1340604 kB
+Inactive:        1455668 kB
+Active(anon):     614312 kB
+Inactive(anon):   488976 kB
+Active(file):     726292 kB
+Inactive(file):   966692 kB
+Unevictable:       82488 kB
+Mlocked:            5772 kB
+SwapTotal:      12595196 kB
+SwapFree:       12499980 kB
+Zswap:                 0 kB
+Zswapped:              0 kB
+Dirty:              1276 kB
+Writeback:             0 kB
+AnonPages:        667680 kB
+Mapped:           201760 kB
+Shmem:            392600 kB
+KReclaimable:     912768 kB
+Slab:            1584476 kB
+SReclaimable:     912768 kB
+SUnreclaim:       671708 kB
+KernelStack:       14752 kB
+PageTables:        19704 kB
+SecPageTables:      7608 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:    20650508 kB
+Committed_AS:    5731388 kB
+VmallocTotal:   34359738367 kB
+VmallocUsed:     1225748 kB
+VmallocChunk:          0 kB
+Percpu:            13872 kB
+HardwareCorrupted:     0 kB
+AnonHugePages:    262144 kB
+ShmemHugePages:   366592 kB
+ShmemPmdMapped:        0 kB
+FileHugePages:         0 kB
+FilePmdMapped:         0 kB
+Unaccepted:            0 kB
+HugePages_Total:       0
+HugePages_Free:        0
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:               0 kB
+DirectMap4k:      443224 kB
+DirectMap2M:     9777152 kB
+DirectMap1G:     6291456 kB
+@@
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 6012849   11811    0    0    0     0          0         0  6012849   11811    0    0    0     0       0          0
+enp94s0: 467199832929 326061876    0    0    6     0          0        61 3257517389 47632040    0    8    0     0       0          0
+enp95s0: 210368285268 141293627    0 3920   39     0          0     19403 1438630517 11912254    0    0    0     0       0          0
+enp96s0: 8945973  102637    5 3829    0     0          0     70984        0       0    0    0    0     0       0          0
+enp7s0f0np0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+enp7s0f1np1:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+enp7s0f2np2:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+enp7s0f3np3:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+@@
+ 259       0 nvme0n1 570 0 21989 85 2647256 0 362517515 1621877 0 980708 2374135 13878 0 34213040 14774 443248 737398
+ 259       8 nvme0n1p1 187 0 9808 46 2647247 0 362517448 1621868 0 1048308 1636689 13878 0 34213040 14774 0 0
+ 259       9 nvme0n1p9 61 0 736 3 0 0 0 0 0 0 3 0 0 0 0 0 0
+ 259       2 nvme2n1 566 0 21501 74 2646593 0 362518563 1612382 0 983052 2370942 13980 0 34221920 23859 443248 734625
+ 259      10 nvme2n1p1 178 0 9288 30 2646584 0 362518496 1612372 0 1088252 1636262 13980 0 34221920 23859 0 0
+ 259      11 nvme2n1p9 61 0 736 4 0 0 0 0 0 8 4 0 0 0 0 0 0
+ 259       1 nvme1n1 677 0 25461 75 2629378 0 362404811 1608168 0 968896 2343008 13878 0 34213040 15820 443248 718943
+ 259      12 nvme1n1p1 242 0 11840 29 2629369 0 362404744 1608158 0 1263704 1624008 13878 0 34213040 15820 0 0
+ 259      13 nvme1n1p9 61 0 736 4 0 0 0 0 0 4 4 0 0 0 0 0 0
+ 259       3 nvme3n1 562 0 21301 66 2630495 0 362406683 1615758 0 975928 2362472 13980 0 34221920 16006 443248 730640
+ 259      14 nvme3n1p1 181 0 9200 25 2630486 0 362406616 1615749 0 1341252 1631782 13980 0 34221920 16006 0 0
+ 259      15 nvme3n1p9 61 0 736 3 0 0 0 0 0 4 3 0 0 0 0 0 0
+ 259       4 nvme4n1 90837 11990 6162473 26871 191935 166187 11047100 886301 0 411900 990267 0 0 0 0 44152 77094
+ 259       5 nvme4n1p1 671 1570 31157 102 4 0 4 31 0 56 133 0 0 0 0 0 0
+ 259       6 nvme4n1p2 1428 26 202794 215 641 82 149456 397 0 296 612 0 0 0 0 0 0
+ 259       7 nvme4n1p3 88600 10394 5924594 26542 191222 166105 10897640 885736 0 416464 912279 0 0 0 0 0 0
+ 254       0 dm-0 96979 0 5799298 29068 317031 0 10719456 2002216 0 434216 2031284 0 0 0 0 0 0
+ 254       1 dm-1 1482 0 15056 608 10009 0 178184 121188 0 37612 121796 0 0 0 0 0 0
+@@
+hits                            4    13054704
+misses                          4    53
+c_max                           4    15423537152
+size                            4    9285522640
+@@
+spd5118|0-0050|temp|42750
+enp96s0|0000:60:00.0|PHY Temperature|78000
+enp96s0|0000:60:00.0|MAC Temperature|78000
+nvme|nvme3|Sensor 2|39850
+nvme|nvme3|Composite|42850
+nvme|nvme3|Sensor 1|42850
+nvme|nvme0|Sensor 2|36850
+nvme|nvme0|Composite|41850
+nvme|nvme0|Sensor 1|41850
+acpitz|thermal_zone0|temp|27800
+coretemp|coretemp.0|Core 4|38000
+coretemp|coretemp.0|Core 11|36000
+coretemp|coretemp.0|Core 15|35000
+coretemp|coretemp.0|Core 8|36000
+coretemp|coretemp.0|Core 12|35000
+coretemp|coretemp.0|Core 9|36000
+coretemp|coretemp.0|Package id 0|41000
+coretemp|coretemp.0|Core 13|35000
+coretemp|coretemp.0|Core 10|36000
+coretemp|coretemp.0|Core 0|38000
+coretemp|coretemp.0|Core 14|35000
+nvme|nvme4|Composite|35850
+nvme|nvme2|Sensor 2|37850
+nvme|nvme2|Composite|40850
+nvme|nvme2|Sensor 1|40850
+nvme|nvme1|Sensor 2|39850
+nvme|nvme1|Composite|43850
+nvme|nvme1|Sensor 1|42850
+@@
+0.69 0.24 0.14 1/914 379468
+34739.39 401201.46
