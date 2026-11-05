@@ -101,7 +101,7 @@ impl Config {
         let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
         public["recycle_days"] = json!(recycle_days); // the effective value, even when unset
         let f = |k: &str| v["features"][k].as_bool().unwrap_or(false);
-        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), disks: f("disks"), replication: f("replication"), iscsi: f("iscsi") };
+        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), vdevs: f("vdevs"), disks: f("disks"), replication: f("replication"), iscsi: f("iscsi") };
         let firewall_table = v["firewall_table"].as_str().map(String::from);
         let l = &v["login"];
         let login = l.is_object().then(|| Login {
@@ -121,7 +121,7 @@ impl Config {
             capacity_pct: a["capacity_pct"].as_u64().unwrap_or(85),
             interval_s: a["interval_s"].as_u64().unwrap_or(300).max(60),
         });
-        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "disks": features.disks, "replication": features.replication, "iscsi": features.iscsi,
+        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "vdevs": features.vdevs, "disks": features.disks, "replication": features.replication, "iscsi": features.iscsi,
             "firewall": firewall_table.is_some(), "login": login.is_some(), "autosnap": std::path::Path::new("/usr/sbin/zfs-auto-snapshot").exists()});
         Config {
             listen: s("listen", "127.0.0.1:9091"),
@@ -246,8 +246,8 @@ fn slow(cfg: &Config) -> String {
     join(vec![
         read("/proc/sys/kernel/hostname") + &read("/proc/sys/kernel/osrelease"),
         // Every imported pool: a pool added later shows up without any config change.
-        cmd(&["zpool", "get", "-Hp", "health,size,allocated,free,fragmentation,capacity"]),
-        cmd(&["zpool", "status"]),
+        cmd(&["zpool", "get", "-Hp", "health,size,allocated,free,fragmentation,capacity,ashift,autotrim"]),
+        cmd(&["zpool", "status", "-t"]), // -t: trim state of each disk
         cmd(&["zfs", "list", "-Hp", "-t", "filesystem,volume", "-o", "name,used,avail,refer,compressratio,compression,recordsize,quota,mountpoint,com.sun:auto-snapshot,type,volsize,volblocksize"]),
         snaps,
         cmd(&["ss", "-Htn", "state", "established", "( sport = :2049 )"]),
@@ -491,6 +491,18 @@ const FR: &[(&str, &str)] = &[
     ("replacement: a free disk only", "remplacement : un disque libre uniquement"),
     ("confirmation: type the pool name again", "confirmation : retapez le nom du pool"),
     ("{}: at least {} free disk(s), each used once", "{} : au moins {} disque(s) libre(s), chacun une seule fois"),
+    ("only a log, cache or spare device can be removed", "seul un périphérique de journal (log), de cache ou de secours peut être retiré"),
+    ("this spare is standing in for a failed disk: replace that disk first", "ce disque de secours remplace un disque en panne : remplacez d'abord ce disque"),
+    ("not a RAIDZ group of this pool", "pas un groupe RAIDZ de ce pool"),
+    ("a scrub, resilver or expansion is in progress on this pool: wait for it to finish", "un scrub, une reconstruction ou une extension est en cours sur ce pool : attendez la fin"),
+    ("expansion: a free disk only", "extension : un disque libre uniquement"),
+    ("free disks only, each used once", "disques libres uniquement, chacun une seule fois"),
+    ("log: one disk, or two or three mirrored", "journal (log) : un disque, ou deux ou trois en miroir"),
+    ("{} would lower the redundancy of the pool: its groups survive {} failed disk(s)", "{} réduirait la redondance du pool : ses groupes supportent {} disque(s) en panne"),
+    ("unknown role", "rôle inconnu"),
+    ("RAIDZ expansion needs the pool's new ZFS features: enable them first", "l'extension RAIDZ demande les nouvelles fonctions ZFS du pool : activez-les d'abord"),
+    ("not in the list of importable pools", "absent de la liste des pools importables"),
+    ("a pool with this name is already imported", "un pool de ce nom est déjà importé"),
     ("invalid request", "requête invalide"),
     ("too many attempts: try again in {} s", "trop d'essais : réessayez dans {} s"),
     ("wrong user name or password", "identifiant ou mot de passe incorrect"),
@@ -697,7 +709,8 @@ struct Features {
     nfs: bool,
     smb: bool,
     users: bool,
-    pools: bool,
+    pools: bool, // create, grow, export/import, upgrade and delete pools; datasets and volumes
+    vdevs: bool, // add and remove log, cache and spare devices (reversible), trim
     disks: bool, // take pool members offline/online, replace them
     replication: bool, // let a backup machine pull this one, pull others (syncoid)
     iscsi: bool, // export volumes over iSCSI (LIO, targetcli)
@@ -1041,7 +1054,7 @@ fn manage_view(cfg: &Config, lang: &str) -> Value {
         .collect();
     json!({
         "state": state, "users": users, "groups": groups, "mountpoints": mountpoints(), "admin_exports": admin_exports(),
-        "free_disks": if cfg.features.pools || cfg.features.disks { json!(free_disks()) } else { json!([]) },
+        "free_disks": if cfg.features.pools || cfg.features.vdevs || cfg.features.disks { json!(free_disks()) } else { json!([]) },
         "alerts": cfg.alerts.as_ref().map(|a| json!({
             // Host only: the URL may carry a topic name, the headers a token.
             "target": a.url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(""),
@@ -1454,6 +1467,30 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
             Ok(format!("op={op} pool={pool} device={} new={}", s("device"), s("new")))
         }
+        "vdev_add" | "vdev_remove" | "raidz_expand" => {
+            // Log, cache and spare devices come and go (features.vdevs); data groups stay for good (features.pools).
+            let data = op == "raidz_expand" || (op == "vdev_add" && s("role") == "data");
+            need(if data { f.pools } else { f.vdevs || f.pools })?;
+            let pool = s("pool");
+            if !pools().contains(&pool) {
+                return Err("unknown pool".into());
+            }
+            let free: Vec<String> = if op == "vdev_remove" { vec![] } else { free_disks().iter().filter_map(|d| d["id"].as_str().map(String::from)).collect() };
+            let argv = vdev_argv(&op, &pool, &cmd(&["zpool", "status", &pool]), &free, a)?;
+            // Checked first: zpool attach partitions the new disk before refusing on this.
+            if op == "raidz_expand" && !matches!(cmd(&["zpool", "get", "-H", "-o", "value", "feature@raidz_expansion", &pool]).trim(), "enabled" | "active") {
+                return Err("RAIDZ expansion needs the pool's new ZFS features: enable them first".into());
+            }
+            run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
+            Ok(format!("op={op} argv={}", argv.join(" ")))
+        }
+        "pool_export" | "pool_import" | "pool_upgrade" | "pool_trim" | "pool_autotrim" => {
+            need(if matches!(op.as_str(), "pool_trim" | "pool_autotrim") { f.vdevs || f.pools } else { f.pools })?;
+            let importable = if op == "pool_import" { parse_importable(&cmd(&["zpool", "import"])) } else { vec![] };
+            let argv = pool_argv(&op, a, &pools(), &importable, &zfs_rows(), &state, &admin_exports())?;
+            run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
+            Ok(format!("op={op} argv={}", argv.join(" ")))
+        }
         "repl_allow" | "repl_revoke" => {
             need(f.replication)?;
             let host = s("host");
@@ -1555,21 +1592,29 @@ fn status_rows(status: &str) -> Vec<(usize, String, String)> {
         .collect()
 }
 
-/// A top-level data vdev: its name, its leaves (name, state), and whether a
+/// A top-level vdev: its section ("" = data, else logs, cache, spares,
+/// special, dedup), name, state, leaves (name, state), and whether a
 /// replacing/spare vdev sits inside it.
 struct Vdev {
+    section: String,
     name: String,
+    state: String,
     leaves: Vec<(String, String)>,
     nested: bool,
 }
 
-/// The data vdev of `pool` holding the leaf `dev` (never logs, cache or spares).
-fn vdev_of(rows: &[(usize, String, String)], pool: &str, dev: &str) -> Option<Vdev> {
-    let start = rows.iter().position(|r| r.0 == 0 && r.1 == pool)? + 1;
-    let body = &rows[start..start + rows[start..].iter().position(|r| r.0 == 0).unwrap_or(rows.len() - start)];
-    let mut i = 0;
+/// Every top-level vdev of `pool` (rows of its own `zpool status`).
+fn vdevs(rows: &[(usize, String, String)], pool: &str) -> Vec<Vdev> {
+    let Some(start) = rows.iter().position(|r| r.0 == 0 && r.1 == pool) else { return vec![] };
+    let body = &rows[start + 1..];
+    let (mut out, mut section, mut i) = (vec![], String::new(), 0);
     while i < body.len() {
         let top = &body[i];
+        if top.0 == 0 {
+            section = top.1.clone(); // "logs", "cache", "spares"…: same depth as the pool
+            i += 1;
+            continue;
+        }
         let end = i + 1 + body[i + 1..].iter().position(|r| r.0 <= top.0).unwrap_or(body.len() - i - 1);
         let kids = &body[i + 1..end];
         let leaves: Vec<(String, String)> = if kids.is_empty() {
@@ -1577,12 +1622,15 @@ fn vdev_of(rows: &[(usize, String, String)], pool: &str, dev: &str) -> Option<Vd
         } else {
             kids.iter().enumerate().filter(|(k, r)| kids.get(k + 1).is_none_or(|n| n.0 <= r.0)).map(|(_, r)| (r.1.clone(), r.2.clone())).collect()
         };
-        if leaves.iter().any(|l| l.0 == dev) {
-            return Some(Vdev { name: top.1.clone(), leaves, nested: kids.iter().any(|r| r.0 > top.0 + 2) });
-        }
+        out.push(Vdev { section: section.clone(), name: top.1.clone(), state: top.2.clone(), leaves, nested: kids.iter().any(|r| r.0 > top.0 + 2) });
         i = end;
     }
-    None
+    out
+}
+
+/// The data vdev of `pool` holding the leaf `dev` (never logs, cache or spares).
+fn vdev_of(rows: &[(usize, String, String)], pool: &str, dev: &str) -> Option<Vdev> {
+    vdevs(rows, pool).into_iter().find(|v| v.section.is_empty() && v.leaves.iter().any(|l| l.0 == dev))
 }
 
 /// Disks of a vdev that may fail without losing data.
@@ -1628,6 +1676,128 @@ fn disk_argv(op: &str, pool: &str, status: &str, free: &[String], a: &Value) -> 
         return Err("replacement: a free disk only".into());
     }
     Ok(argv(&["zpool", "replace", pool, &dev, &format!("/dev/disk/by-id/{new}")]))
+}
+
+/* ---------- pool layout: log, cache, spare, data vdevs, RAIDZ expansion ---------- */
+
+/// Validated argv for vdev_add / vdev_remove / raidz_expand on `pool`, from
+/// its `zpool status` and the free disks (by-id names). Never -f: zpool's own
+/// checks (mismatched replication, disk in use) stay in force.
+fn vdev_argv(op: &str, pool: &str, status: &str, free: &[String], a: &Value) -> Result<Vec<String>, String> {
+    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    let all = vdevs(&status_rows(status), pool);
+    let mut argv: Vec<String> = vec!["zpool".into()];
+    if op == "vdev_remove" {
+        // Only what zpool removes without moving data: a log, a cache or a spare device.
+        let dev = s("device");
+        let v = all.iter().find(|v| v.name == dev && ["logs", "cache", "spares"].contains(&v.section.as_str())).ok_or("only a log, cache or spare device can be removed")?;
+        if v.state == "INUSE" {
+            return Err("this spare is standing in for a failed disk: replace that disk first".into());
+        }
+        argv.extend(["remove".into(), pool.into(), dev]);
+        return Ok(argv);
+    }
+    if s("confirm") != pool {
+        return Err("confirmation: type the pool name again".into());
+    }
+    let data: Vec<&Vdev> = all.iter().filter(|v| v.section.is_empty()).collect();
+    if op == "raidz_expand" {
+        let vdev = s("vdev");
+        if !data.iter().any(|v| v.name == vdev && v.name.starts_with("raidz")) {
+            return Err("not a RAIDZ group of this pool".into());
+        }
+        if status.contains("in progress") {
+            return Err("a scrub, resilver or expansion is in progress on this pool: wait for it to finish".into());
+        }
+        let new = s("new");
+        if !free.contains(&new) {
+            return Err("expansion: a free disk only".into());
+        }
+        argv.extend(["attach".into(), pool.into(), vdev, format!("/dev/disk/by-id/{new}")]);
+        return Ok(argv);
+    }
+    let (role, disks) = (s("role"), strings(a, "disks"));
+    let mut unique = disks.clone();
+    unique.sort();
+    unique.dedup();
+    if disks.is_empty() || disks.len() > 32 || unique.len() != disks.len() || !disks.iter().all(|d| free.contains(d)) {
+        return Err("free disks only, each used once".into());
+    }
+    argv.extend(["add".into(), pool.into()]);
+    match role.as_str() {
+        // Two or three log devices are mirrored: a lone log lost in a crash loses the last writes.
+        "log" if disks.len() <= 3 => argv.extend(if disks.len() > 1 { vec!["log".into(), "mirror".into()] } else { vec!["log".into()] }),
+        "log" => return Err("log: one disk, or two or three mirrored".into()),
+        "cache" | "spare" => argv.push(role.clone()),
+        "data" => {
+            let layout = s("layout");
+            let Some((_, min)) = LAYOUTS.iter().find(|(l, _)| *l == layout) else { return Err("unknown layout".into()) };
+            if disks.len() < *min || (layout == "stripe" && disks.len() != 1) {
+                return Err(format!("{layout}: at least {min} free disk(s), each used once"));
+            }
+            // A group with less redundancy than the existing ones would become the weak point of the whole pool.
+            let new = Vdev { section: String::new(), name: format!("{layout}-new"), state: String::new(), leaves: disks.iter().map(|d| (d.clone(), String::new())).collect(), nested: false };
+            let weakest = data.iter().map(|v| parity(v)).min().unwrap_or(0);
+            if parity(&new) < weakest {
+                return Err(format!("{layout} would lower the redundancy of the pool: its groups survive {weakest} failed disk(s)"));
+            }
+            if layout != "stripe" {
+                argv.push(layout);
+            }
+        }
+        _ => return Err("unknown role".into()),
+    }
+    argv.extend(disks.iter().map(|d| format!("/dev/disk/by-id/{d}")));
+    Ok(argv)
+}
+
+/// (name, id, state, text) of each pool listed by `zpool import` (no argument).
+fn parse_importable(out: &str) -> Vec<Value> {
+    out.split("  pool: ").skip(1).filter_map(|b| {
+        let field = |k: &str| b.lines().find_map(|l| l.trim().strip_prefix(k)).map(|v| v.trim().to_string());
+        let name = b.lines().next()?.trim().to_string();
+        let id = field("id:")?;
+        Some(json!({"name": name, "id": id, "state": field("state:").unwrap_or_default(), "text": format!("  pool: {}", b.trim_end())}))
+    }).collect()
+}
+
+/// Validated argv for pool_export / pool_import / pool_upgrade / pool_trim / pool_autotrim.
+/// Export is refused while shares, exports or replications use the pool;
+/// import takes a pool from the `zpool import` listing, by id, never -f.
+fn pool_argv(op: &str, a: &Value, pools: &[String], importable: &[Value], rows: &[Zrow], state: &Value, exports: &[String]) -> Result<Vec<String>, String> {
+    let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    let pool = s("pool");
+    let v = |x: &[&str]| -> Vec<String> { x.iter().map(|s| s.to_string()).collect() };
+    if op == "pool_import" {
+        let id = s("id");
+        let p = importable.iter().find(|p| p["id"] == id.as_str()).ok_or("not in the list of importable pools")?;
+        if pools.iter().any(|x| p["name"] == x.as_str()) {
+            return Err("a pool with this name is already imported".into());
+        }
+        return Ok(v(&["zpool", "import", &id]));
+    }
+    if !pools.contains(&pool) {
+        return Err("unknown pool".into());
+    }
+    match op {
+        "pool_trim" => Ok(v(&["zpool", "trim", &pool])),
+        "pool_autotrim" => Ok(v(&["zpool", "set", if a["on"] == true { "autotrim=on" } else { "autotrim=off" }, &pool])),
+        "pool_upgrade" | "pool_export" => {
+            if s("confirm") != pool {
+                return Err("confirmation: type the pool name again".into());
+            }
+            if op == "pool_upgrade" {
+                return Ok(v(&["zpool", "upgrade", &pool]));
+            }
+            let under: Vec<&Zrow> = rows.iter().filter(|r| r.name == pool || r.name.starts_with(&format!("{pool}/"))).collect();
+            let used = in_use(state, exports, &under);
+            if !used.is_empty() {
+                return Err(format!("still in use, remove it first from: {}", used.join(", ")));
+            }
+            Ok(v(&["zpool", "export", &pool]))
+        }
+        _ => Err("unknown operation".into()),
+    }
 }
 
 
@@ -2202,6 +2372,8 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Get, "/api/summary") => respond(r, 200, summary(cfg).to_string(), "application/json"),
         (Method::Get, "/api/slow") => respond(r, 200, slow(cfg), "text/plain"),
         (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg, lang).to_string(), "application/json"),
+        // On demand only: zpool import reads the label of every disk.
+        (Method::Get, "/api/importable") if cfg.features.pools => respond(r, 200, json!(parse_importable(&cmd(&["zpool", "import"]))).to_string(), "application/json"),
         (Method::Post, "/api/manage") => {
             if !header(&r, "Content-Type").starts_with("application/json") {
                 return respond(r, 400, err("invalid request"), "application/json");
@@ -2302,6 +2474,7 @@ fn demo(mut r: Request) {
         }
         (Method::Get, "/api/slow") => respond(r, 200, include_str!("../demo/slow.txt").into(), "text/plain"),
         (Method::Get, "/api/manage") => respond(r, 200, include_str!("../demo/manage.json").into(), jsn),
+        (Method::Get, "/api/importable") => respond(r, 200, json!(parse_importable(include_str!("../demo/import.txt"))).to_string(), jsn),
         (Method::Post, "/api/ui") => {
             let mut body = String::new();
             let _ = r.as_reader().take(65536).read_to_string(&mut body);
@@ -2569,6 +2742,101 @@ mod tests {
             "a replacement or resilver is in progress on this pool: wait for it to finish");
         assert!(go(resilver, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
         assert!(go(resilver, json!({"op": "disk_offline", "device": "replacing-1", "confirm": "tank"})).is_err());
+    }
+
+    // Real zpool 2.3.9 output: raidz1 + mirrored log + cache + spare ("logs" ends with a tab).
+    const SPECIAL: &str = "  pool: zt\n state: ONLINE\nconfig:\n\n\tNAME             STATE     READ WRITE CKSUM\n\tzt               ONLINE       0     0     0\n\t  raidz1-0       ONLINE       0     0     0\n\t    ata-A        ONLINE       0     0     0\n\t    ata-B        ONLINE       0     0     0\n\t    ata-C        ONLINE       0     0     0\n\tlogs\t\n\t  mirror-1       ONLINE       0     0     0\n\t    ata-L1       ONLINE       0     0     0\n\t    ata-L2       ONLINE       0     0     0\n\tcache\n\t  ata-K        ONLINE       0     0     0\n\tspares\n\t  ata-S        AVAIL   \n\nerrors: No known data errors\n";
+
+    #[test]
+    fn vdev_tree() {
+        let v = vdevs(&status_rows(SPECIAL), "zt");
+        let got: Vec<(&str, &str, &str, usize)> = v.iter().map(|v| (v.section.as_str(), v.name.as_str(), v.state.as_str(), v.leaves.len())).collect();
+        assert_eq!(got, [("", "raidz1-0", "ONLINE", 3), ("logs", "mirror-1", "ONLINE", 2), ("cache", "ata-K", "ONLINE", 1), ("spares", "ata-S", "AVAIL", 1)]);
+        // Disk operations still see the data disks only.
+        assert!(vdev_of(&status_rows(SPECIAL), "zt", "ata-B").is_some() && vdev_of(&status_rows(SPECIAL), "zt", "ata-L1").is_none());
+    }
+
+    #[test]
+    fn vdev_changes() {
+        let free = ["ata-N1".to_string(), "ata-N2".to_string(), "ata-N3".to_string()];
+        let go = |st: &str, a: Value| vdev_argv(a["op"].as_str().unwrap(), "zt", st, &free, &a);
+        let add = |role: &str, disks: &[&str]| json!({"op": "vdev_add", "role": role, "disks": disks, "confirm": "zt"});
+        assert_eq!(go(SPECIAL, add("log", &["ata-N1"])).unwrap(), ["zpool", "add", "zt", "log", "/dev/disk/by-id/ata-N1"]);
+        assert_eq!(go(SPECIAL, add("log", &["ata-N1", "ata-N2"])).unwrap(), ["zpool", "add", "zt", "log", "mirror", "/dev/disk/by-id/ata-N1", "/dev/disk/by-id/ata-N2"]);
+        assert_eq!(go(SPECIAL, add("cache", &["ata-N1"])).unwrap()[3], "cache");
+        assert_eq!(go(SPECIAL, add("spare", &["ata-N1", "ata-N2"])).unwrap()[3..5], ["spare", "/dev/disk/by-id/ata-N1"]);
+        let mut data = add("data", &["ata-N1", "ata-N2", "ata-N3"]);
+        data["layout"] = json!("raidz1");
+        assert_eq!(go(SPECIAL, data.clone()).unwrap(), ["zpool", "add", "zt", "raidz1", "/dev/disk/by-id/ata-N1", "/dev/disk/by-id/ata-N2", "/dev/disk/by-id/ata-N3"]);
+        // Refusals: not free, twice, no confirmation, unknown role or layout, lower redundancy.
+        assert_eq!(go(SPECIAL, add("log", &["ata-A"])).unwrap_err(), "free disks only, each used once");
+        assert!(go(SPECIAL, add("log", &["ata-N1", "ata-N1"])).is_err());
+        assert!(go(SPECIAL, add("log", &[])).is_err());
+        assert!(go(SPECIAL, add("cache", &["../../sda"])).is_err());
+        assert!(go(SPECIAL, json!({"op": "vdev_add", "role": "log", "disks": ["ata-N1"], "confirm": "zx"})).is_err());
+        assert_eq!(go(SPECIAL, add("special", &["ata-N1"])).unwrap_err(), "unknown role");
+        let mut four = add("log", &["ata-N1", "ata-N2", "ata-N3"]);
+        assert!(go(SPECIAL, four.clone()).is_ok());
+        four["disks"] = json!(["ata-N1", "ata-N2", "ata-N3", "ata-N1"]);
+        assert!(go(SPECIAL, four).is_err());
+        data["layout"] = json!("stripe");
+        assert!(go(SPECIAL, data.clone()).is_err()); // three disks as one stripe: refused
+        data["disks"] = json!(["ata-N1"]);
+        assert_eq!(go(SPECIAL, data.clone()).unwrap_err(), "stripe would lower the redundancy of the pool: its groups survive 1 failed disk(s)");
+        assert_eq!(tr("fr", &go(SPECIAL, data.clone()).unwrap_err()), "stripe réduirait la redondance du pool : ses groupes supportent 1 disque(s) en panne");
+        data["layout"] = json!("mirror");
+        data["disks"] = json!(["ata-N1", "ata-N2"]);
+        assert!(go(SPECIAL, data.clone()).is_ok()); // same redundancy, another layout: zpool decides (never -f)
+        data["layout"] = json!("raidz9");
+        assert_eq!(go(SPECIAL, data).unwrap_err(), "unknown layout");
+        // Removal: log, cache, spare only; a mirrored log goes as a whole.
+        let rm = |d: &str| json!({"op": "vdev_remove", "device": d});
+        assert_eq!(go(SPECIAL, rm("mirror-1")).unwrap(), ["zpool", "remove", "zt", "mirror-1"]);
+        assert_eq!(go(SPECIAL, rm("ata-K")).unwrap(), ["zpool", "remove", "zt", "ata-K"]);
+        assert_eq!(go(SPECIAL, rm("ata-S")).unwrap(), ["zpool", "remove", "zt", "ata-S"]);
+        for d in ["raidz1-0", "ata-A", "ata-L1", "logs", "zt", "-f", ""] {
+            assert_eq!(go(SPECIAL, rm(d)).unwrap_err(), "only a log, cache or spare device can be removed", "{d}");
+        }
+        assert!(go(&SPECIAL.replace("AVAIL", "INUSE"), rm("ata-S")).is_err());
+        // RAIDZ expansion: an existing raidz group, a free disk, nothing in progress.
+        let ex = |v: &str, n: &str| json!({"op": "raidz_expand", "vdev": v, "new": n, "confirm": "zt"});
+        assert_eq!(go(SPECIAL, ex("raidz1-0", "ata-N1")).unwrap(), ["zpool", "attach", "zt", "raidz1-0", "/dev/disk/by-id/ata-N1"]);
+        assert_eq!(go(SPECIAL, ex("mirror-1", "ata-N1")).unwrap_err(), "not a RAIDZ group of this pool");
+        assert!(go(SPECIAL, ex("raidz1-0", "ata-A")).is_err());
+        let busy = SPECIAL.replace("config:", "expand: expansion of raidz1-0 in progress since Thu Nov  5 14:03:08 2026\n\t756M / 1.76G copied at 756M/s, 41.94% done, 00:00:01 to go\nconfig:");
+        assert!(go(&busy, ex("raidz1-0", "ata-N1")).is_err());
+        // A mirror pool: one disk alone would lower redundancy; a pair is fine.
+        let mirror = status("\ttank        ONLINE       0     0     0\n\t  mirror-0  ONLINE       0     0     0\n\t    ata-A   ONLINE       0     0     0\n\t    ata-B   ONLINE       0     0     0");
+        let pair = json!({"op": "vdev_add", "role": "data", "layout": "mirror", "disks": ["ata-N1", "ata-N2"], "confirm": "tank"});
+        assert_eq!(vdev_argv("vdev_add", "tank", &mirror, &free, &pair).unwrap()[3], "mirror");
+    }
+
+    #[test]
+    fn pool_ops() {
+        let listing = "   pool: archive\n     id: 116076908731\n  state: ONLINE\n action: The pool can be imported using its name or numeric identifier.\n config:\n\n\tarchive     ONLINE\n\t  ata-X     ONLINE\n\n   pool: tank\n     id: 42\n  state: ONLINE\n status: The pool was last accessed by another system.\n action: The pool can be imported using its name or numeric identifier and\n\tthe '-f' flag.\n config:\n\n\ttank   ONLINE\n";
+        let imp = parse_importable(listing);
+        assert_eq!(imp.len(), 2);
+        assert_eq!((imp[0]["name"].as_str(), imp[0]["id"].as_str(), imp[0]["state"].as_str()), (Some("archive"), Some("116076908731"), Some("ONLINE")));
+        assert!(imp[1]["text"].as_str().unwrap().contains("last accessed by another system"));
+        assert!(parse_importable("").is_empty());
+        assert_eq!(parse_importable(include_str!("../demo/import.txt"))[0]["name"], "archive");
+        let rows = parse_zrows("tank\tfilesystem\t/tank\t-\t-\ntank/a\tfilesystem\t/tank/a\t-\t-\nfast\tfilesystem\t/fast\t-\t-\n");
+        let pools = ["tank".to_string(), "fast".to_string()];
+        let st = json!({"nfs": {"m": {"path": "/tank/a"}}});
+        let go = |a: Value| pool_argv(a["op"].as_str().unwrap(), &a, &pools, &imp, &rows, &st, &[]);
+        assert_eq!(go(json!({"op": "pool_import", "id": "116076908731"})).unwrap(), ["zpool", "import", "116076908731"]);
+        assert_eq!(go(json!({"op": "pool_import", "id": "42"})).unwrap_err(), "a pool with this name is already imported");
+        assert_eq!(go(json!({"op": "pool_import", "id": "-f"})).unwrap_err(), "not in the list of importable pools");
+        assert_eq!(go(json!({"op": "pool_export", "pool": "tank", "confirm": "tank"})).unwrap_err(), "still in use, remove it first from: nfs:m");
+        assert_eq!(go(json!({"op": "pool_export", "pool": "fast", "confirm": "fast"})).unwrap(), ["zpool", "export", "fast"]);
+        assert!(go(json!({"op": "pool_export", "pool": "fast"})).is_err());
+        assert_eq!(go(json!({"op": "pool_upgrade", "pool": "fast", "confirm": "fast"})).unwrap(), ["zpool", "upgrade", "fast"]);
+        assert!(go(json!({"op": "pool_upgrade", "pool": "fast", "confirm": "tank"})).is_err());
+        assert!(go(json!({"op": "pool_upgrade", "pool": "-a", "confirm": "-a"})).is_err()); // never all pools
+        assert_eq!(go(json!({"op": "pool_trim", "pool": "fast"})).unwrap(), ["zpool", "trim", "fast"]);
+        assert_eq!(go(json!({"op": "pool_autotrim", "pool": "tank", "on": true})).unwrap(), ["zpool", "set", "autotrim=on", "tank"]);
+        assert_eq!(go(json!({"op": "pool_autotrim", "pool": "tank", "on": "yes"})).unwrap()[2], "autotrim=off");
+        assert_eq!(go(json!({"op": "pool_trim", "pool": "other"})).unwrap_err(), "unknown pool");
     }
 
     #[test]

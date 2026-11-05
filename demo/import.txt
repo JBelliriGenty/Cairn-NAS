@@ -1,0 +1,10 @@
+   pool: archive
+     id: 11607690873174622414
+  state: ONLINE
+ action: The pool can be imported using its name or numeric identifier.
+ config:
+
+	archive                     ONLINE
+	  mirror-0                  ONLINE
+	    ata-WDC_WD80EFZZ_DEMO0021  ONLINE
+	    ata-WDC_WD80EFZZ_DEMO0022  ONLINE

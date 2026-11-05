@@ -302,7 +302,7 @@ function fastTick() {
 
 function slowTick() {
   const f = FEAT();
-  const manage = f.nfs || f.smb || f.users || f.pools || f.disks || f.replication || f.iscsi ? get("/api/manage") : Promise.resolve("");
+  const manage = f.nfs || f.smb || f.users || f.pools || f.vdevs || f.disks || f.replication || f.iscsi ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
     const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health, repl] = sections(out);
@@ -543,13 +543,25 @@ function devOf(name) {
   return m ? m[1] : t;
 }
 
+// Sections after the data groups in zpool status, and what each is for.
+const ROLES = { logs: "Log (SLOG)", cache: "Cache (L2ARC)", spares: "Spare disk", special: "Special", dedup: "Dedup" };
+const REMOVABLE = ["logs", "cache", "spares"];
+
 function renderDisks() {
   const groups = [];
-  for (const root of Object.values(S.statusOf).flatMap(poolTree)) {
+  for (const [pn, st] of Object.entries(S.statusOf)) {
+    const [root, ...secs] = poolTree(st), scan = scanText(st), exp = expandText(st);
+    if (!root) continue;
     for (const v of root.children) {
-      groups.push({ key: root.name + "/" + v.name, title: poolName(root.name) + (v.children.length ? " · " + v.name : " · " + t("single disk")),
-        state: v.state, pool: S.pools[root.name], scan: scanText(S.statusOf[root.name] || ""),
-        members: leaves(v).map(l => ({ dev: devOf(l.name), id: l.name, state: l.state, err: l.err, pool: root.name })) });
+      groups.push({ key: pn + "/" + v.name, title: poolName(pn) + (v.children.length ? " · " + v.name : " · " + t("single disk")),
+        state: v.state, pool: S.pools[pn], scan, exp: exp && exp.vdev === v.name ? exp : null,
+        members: leaves(v).map(l => ({ dev: devOf(l.name), id: l.name, state: l.state, err: l.err, pool: pn })) });
+    }
+    // Log, cache and spare devices: one card per top-level device, removable from the page.
+    for (const sec of secs) for (const v of sec.children) {
+      groups.push({ key: pn + "/" + sec.name + "/" + v.name, title: poolName(pn) + " · " + t(ROLES[sec.name] || sec.name) + (v.children.length ? " · " + v.name : ""),
+        state: v.state, role: sec.name, poolId: pn, vdev: v.name,
+        members: leaves(v).map(l => ({ dev: devOf(l.name), id: l.name, state: l.state, err: l.err, pool: pn, role: sec.name })) });
     }
   }
   const inPool = new Set(groups.flatMap(g => g.members.map(m => m.dev)));
@@ -562,23 +574,27 @@ function renderDisks() {
     const temps = devs.map(d => S.health[d]?.temp ?? F.nvmeT[d]).filter(x => x != null);
     const hs = devs.map(d => healthOf(S.health[d]));
     const errs = g.members.reduce((acc, m) => acc + m.err.reduce((a, b) => a + (b || 0), 0), 0);
-    const lvl = worst([...hs.map(h => h.lvl), g.state && g.state !== "ONLINE" ? "bad" : "ok", errs ? "warn" : "ok"]);
+    const lvl = worst([...hs.map(h => h.lvl), stateLvl(g.state), errs ? "warn" : "ok"]);
     const cap = devs.reduce((acc, d) => acc + (S.health[d]?.capacity || 0), 0);
     return '<article class="card group ' + lvl + '"><div class="row"><span class="dot ' + (lvl === "ok" ? "ok" : lvl === "bad" ? "bad" : "warn") + '"></span>' +
       "<b>" + esc(g.title) + '</b><span class="tag">' + tp(devs.length, "{n} disk · {size} raw", "{n} disks · {size} raw", { size: bytes(cap) }) + "</span>" +
-      (g.state ? '<span class="pill ' + (g.state === "ONLINE" ? "ok" : "bad") + '">' + esc(g.state) + "</span>" : "") + "</div>" +
+      (g.state ? '<span class="pill ' + stateLvl(g.state) + '">' + esc(g.state) + "</span>" : "") + "</div>" +
       '<div class="stats">' +
       stat(t("Read"), bytes(last(r)) + "/s", "rx") + stat(t("Write"), bytes(last(w)) + "/s", "tx") +
       stat(t("Max temperature"), temps.length ? nf(Math.max(...temps), 0) + " °C" : "—", lvlTemp(Math.max(0, ...temps))) +
       stat(t("Health"), t("{ok} / {total} good", { ok: hs.filter(h => h.lvl === "ok").length, total: hs.length }), lvl) +
       stat(t("ZFS errors"), String(errs), errs ? "warn" : "") +
       (g.pool ? stat(t("Pool used"), nf(g.pool.capacity, 0) + " %", "") : "") + "</div>" +
-      (g.scan && g.scan.resilver ? scanProgress(g.scan) : "") +
+      (g.scan && g.scan.resilver ? scanProgress(g.scan) : "") + (g.exp ? scanProgress(g.exp) : "") +
       spark([r, w], 1e5, true) +
+      (g.role && REMOVABLE.includes(g.role) && (FEAT().vdevs || FEAT().pools)
+        ? '<div class="disk-acts"><button class="danger" data-act="vdev-del" data-pool="' + esc(g.poolId) + '" data-dev="' + esc(g.vdev) + '" data-role="' + g.role + '">' + t("Remove from the pool") + "</button></div>" : "") +
       '<details data-group="' + esc(g.key) + '"' + (openGroups.has(g.key) ? " open" : "") + "><summary>" + t("Disk by disk") + "</summary>" +
       '<div class="grid disks">' + g.members.map(diskCard).join("") + "</div></details></article>";
   }).join("");
 }
+// ONLINE, and AVAIL for an idle spare, are fine; INUSE = a spare standing in for a failed disk.
+const stateLvl = st => !st || st === "ONLINE" || st === "AVAIL" ? "ok" : st === "INUSE" || st === "OFFLINE" ? "warn" : "bad";
 function stat(label, value, cls) {
   return '<div class="stat ' + (cls || "") + '"><span>' + esc(label) + "</span><b>" + esc(value) + "</b></div>";
 }
@@ -602,7 +618,7 @@ function diskCard(m) {
 }
 // Offline / online / replace a pool member (features.disks); the server checks redundancy again.
 function diskActions(m) {
-  if (!FEAT().disks || !m.pool) return "";
+  if (!FEAT().disks || !m.pool || m.role) return "";
   const b = (act, label) => '<button data-act="' + act + '" data-pool="' + esc(m.pool) + '" data-dev="' + esc(m.id) + '">' + label + "</button>";
   return '<div class="disk-acts"><span class="pill ' + (m.state === "ONLINE" ? "ok" : m.state === "OFFLINE" ? "warn" : "bad") + '">' + esc(m.state) + "</span>" +
     (m.state === "OFFLINE" ? b("disk-online", t("Bring online")) : ["ONLINE", "DEGRADED", "FAULTED"].includes(m.state) ? b("disk-offline", t("Take offline")) : "") +
@@ -616,35 +632,61 @@ const isVol = r => r[10] === "volume";
 const fsRows = () => S.datasets.filter(r => !isVol(r));
 
 function scanText(status) {
-  const scan = (status.match(/^\s*scan: ([\s\S]*?)\nconfig:/m) || [, t("no scrub yet")])[1].replace(/\n\s+/g, " ").trim();
+  const scan = (status.match(/^\s*scan: ([\s\S]*?)\n(?:expand|config):/m) || [, t("no scrub yet")])[1].replace(/\n\s+/g, " ").trim();
   const pct = scan.match(/([\d.]+)% done/), eta = scan.match(/done, (\S+) to go/);
   return { text: scan, running: /in progress/.test(scan), resilver: /^resilver in progress/.test(scan), pct: pct ? Number(pct[1]) : null, eta: eta ? eta[1] : "" };
+}
+// RAIDZ expansion (zpool attach raidzN-X): "expand: expansion of raidz1-0 in progress since …", then the same progress line as a resilver.
+function expandText(status) {
+  const m = status.match(/^\s*expand: ([\s\S]*?)\nconfig:/m);
+  if (!m) return null;
+  const x = m[1].replace(/\n\s+/g, " ").trim(), v = x.match(/expansion of (\S+) in progress/), pct = x.match(/([\d.]+)% done/), eta = x.match(/done, (\S+) to go/);
+  return { text: x, running: !!v, vdev: v ? v[1] : "", label: t("RAIDZ expansion"), pct: pct ? Number(pct[1]) : null, eta: eta ? eta[1] : "" };
+}
+// Pool properties (ashift, autotrim, feature upgrade, trim) and, with features.vdevs / pools, its layout controls.
+const canUpgrade = st => /features are not enabled/.test(st);
+function poolManage(p, st, root) {
+  const f = FEAT(), name = esc(p.name), trimming = /\d+% trimmed/.test(st);
+  const props = [t("ashift {n} ({size} sectors)", { n: p.ashift, size: bytes(2 ** Number(p.ashift || 0)) }),
+    t("automatic trim: {v}", { v: p.autotrim === "on" ? t("on") : t("off") }),
+    canUpgrade(st) ? t("ZFS features to enable (zpool upgrade)") : t("all ZFS features enabled")].concat(trimming ? [t("trim in progress")] : []);
+  const b = (act, label, cls, extra) => '<button' + (cls ? ' class="' + cls + '"' : "") + ' data-act="' + act + '" data-pool="' + name + '"' + (extra || "") + ">" + label + "</button>";
+  const raidz = (root ? root.children : []).some(v => /^raidz/.test(v.name));
+  const btns = (f.vdevs || f.pools ? b("vdev-add", t("Add a log device (SLOG)"), "", ' data-role="log"') + b("vdev-add", t("Add a cache device (L2ARC)"), "", ' data-role="cache"') +
+      b("vdev-add", t("Add a spare disk"), "", ' data-role="spare"') + b("pool-trim", t("Trim now")) +
+      b("pool-autotrim", p.autotrim === "on" ? t("Turn automatic trim off") : t("Turn automatic trim on"), "", ' data-on="' + (p.autotrim === "on" ? "" : "1") + '"') : "") +
+    (f.pools ? b("vdev-add", t("Add a data group"), "", ' data-role="data"') + (raidz ? b("raidz-expand", t("Expand a RAIDZ group")) : "") +
+      (canUpgrade(st) ? b("pool-upgrade", t("Enable new ZFS features")) : "") + b("pool-export", t("Export")) + b("pool-del", t("Delete the pool"), "danger") : "");
+  return '<p class="sub">' + props.map(esc).join(" · ") + "</p>" + (btns ? '<details data-group="manage:' + name + '"' + (openGroups.has("manage:" + p.name) ? " open" : "") + "><summary>" +
+    t("Layout and maintenance") + '</summary><div class="disk-acts">' + btns + "</div></details>" : "");
 }
 // Progress of a running scrub or resilver (zpool status: "12.3% done, 01:02:03 to go"); the slow loop refreshes it.
 function scanProgress(scan) {
   if (!scan.running || scan.pct == null) return "";
-  const what = scan.resilver ? t("Resilver") : t("Scrub");
+  const what = scan.label || (scan.resilver ? t("Resilver") : t("Scrub"));
   return '<div class="bar thin scan"><i data-w="' + scan.pct + '"></i></div><p class="sub">' +
     (scan.eta ? t("{what}: {pct} % done, {eta} left", { what, pct: nf(scan.pct, 1), eta: esc(scan.eta) }) : t("{what}: {pct} % done", { what, pct: nf(scan.pct, 1) })) + "</p>";
 }
 
 function renderStorage() {
   $("storage-actions").innerHTML = FEAT().pools
-    ? '<button class="primary" data-act="ds-new">' + t("New dataset") + '</button><button data-act="zvol-new">' + t("New volume") + '</button><button data-act="pool-new">' + t("New pool") + "</button>" : "";
+    ? '<button class="primary" data-act="ds-new">' + t("New dataset") + '</button><button data-act="zvol-new">' + t("New volume") + '</button><button data-act="pool-new">' + t("New pool") + "</button>" +
+      '<button data-act="pool-import">' + t("Import a pool") + "</button>" : "";
   $("pools").innerHTML = Object.values(S.pools).map(p => {
-    const st = S.statusOf[p.name] || "", scan = scanText(st);
+    const st = S.statusOf[p.name] || "", scan = scanText(st), exp = expandText(st);
     const errors = (st.match(/^errors: (.*)$/m) || [, "?"])[1];
-    const vdevs = poolTree(st).flatMap(t => t.children).map(v => v.children.length ? v.name.replace(/-\d+$/, "") + " × " + leaves(v).length : t("single disk"));
+    const [root, ...secs] = poolTree(st);
+    const vdevs = (root ? root.children : []).map(v => v.children.length ? v.name.replace(/-\d+$/, "") + " × " + leaves(v).length : t("single disk"))
+      .concat(secs.map(s => t(ROLES[s.name] || s.name) + " × " + s.children.flatMap(leaves).length));
     const key = "pool:" + p.name;
     return '<article class="card' + (tagOf(key) ? " tagged" : "") + '"' + tagAttr(key) + '><div class="row"><span class="dot ' + (p.health === "ONLINE" ? "ok" : "bad") + '"></span>' +
     nameBlock(key, p.name, p.name) + '<span class="tag">' + esc(vdevs.join(" + ")) + "</span></div>" +
     '<div class="bar big"><i data-w="' + p.capacity + '"></i></div>' +
     '<div class="stats">' + stat(t("Allocated"), bytes(p.allocated), "") + stat(t("Free"), bytes(p.free), "") + stat(t("Raw size"), bytes(p.size), "") +
     stat(t("Fragmentation"), p.fragmentation + " %", "") + (errors.startsWith("No known") ? stat(t("Errors"), t("None"), "ok") : stat(t("Errors"), errors, "bad")) + "</div>" +
-    '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" + scanProgress(scan) +
+    '<p class="sub">' + t("Last scrub: {v}", { v: esc(scan.text) }) + "</p>" + scanProgress(scan) + (exp ? scanProgress(exp) : "") +
     (scan.resilver ? "" : '<button data-act="scrub" data-pool="' + esc(p.name) + '" data-running="' + scan.running + '" class="' + (scan.running ? "danger" : "primary") + '">' +
-    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") +
-    (FEAT().pools ? ' <button class="danger" data-act="pool-del" data-pool="' + esc(p.name) + '">' + t("Delete the pool") + "</button>" : "") + "</article>";
+    (scan.running ? t("Stop scrub") : t("Start a scrub")) + "</button>") + poolManage(p, st, root) + "</article>";
   }).join("");
 
   const del = name => FEAT().pools && name.includes("/") ? '<button class="danger" data-act="ds-del" data-ds="' + esc(name) + '">' + t("Delete") + "</button>" : "";
@@ -1085,6 +1127,71 @@ async function destroyPool(pool) {
   if (fd) mg({ op: "pool_destroy", pool, confirm: fd.get("confirm") }, t("Pool {name} deleted", { name: pool }));
 }
 
+// Pool layout: log / cache / spare (features.vdevs, removable later), data groups and RAIDZ expansion (features.pools, for good).
+const ROLE_FORMS = {
+  log: ["Add a log device (SLOG) to {pool}", "A log device (SLOG) receives the synchronous writes (NFS, virtual machines, databases) on a fast SSD before ZFS writes them to the pool; ordinary writes do not use it. Choose an SSD with power-loss protection (capacitors, found on data-center models such as the Intel S3500): the panel cannot check it, and a consumer SSD without it gives little or no gain. A few GB are used. Two or three disks are mirrored. It can be removed at any time, without losing data."],
+  cache: ["Add a cache device (L2ARC) to {pool}", "A cache device (L2ARC) keeps a copy of often-read data on an SSD, beyond the memory cache (ARC). Useful only when the data read often does not fit in memory; it uses a little memory itself. No redundancy needed: losing it loses no data. It can be removed at any time."],
+  spare: ["Add a spare disk to {pool}", "A spare disk waits unused; when a disk of the pool fails, ZFS puts the spare in its place and rebuilds onto it. It must be at least as large as the pool's disks. It can be removed while unused."],
+  data: ["Add a data group to {pool}", "The pool grows by a new group of disks; new data is spread over all the groups. <b>This cannot be undone</b>: a pool with a RAIDZ group can never lose a group. Use the same layout and disk size as the existing groups; zpool refuses a different redundancy level."],
+};
+const noFreeDisk = async title => ask(title, "<p>" + t("No free disk: every disk already has partitions or data, or belongs to a pool.") + "</p>" +
+  '<p class="sub">' + t("Plug in the new disk: it appears here once it is blank (no partition, no signature).") + "</p>", t("Close"));
+const diskChoice = (type, name) => '<fieldset class="swatches"><legend>' + t("Disks") + "</legend>" + M.free_disks.map((d, i) => '<label class="swatch"><input type="' + type + '" name="' + name + '" value="' + esc(d.id) + '"' +
+  (type === "radio" ? " required" + (i ? "" : " checked") : "") + ">" + esc(d.dev) + " · " + bytes(d.size) + " · " + esc(d.model) + "</label>").join("") + "</fieldset>";
+async function vdevForm(pool, role) {
+  const [title, help] = ROLE_FORMS[role];
+  if (!M.free_disks.length) return noFreeDisk(t(title, { pool }));
+  // The existing groups' layout is offered first: e.g. raidz1 × 3 → raidz1.
+  const [root] = poolTree(S.statusOf[pool] || ""), first = root && root.children[0];
+  const same = first && first.children.length ? first.name.replace(/-\d+$/, "") : "stripe";
+  const fd = await ask(t(title, { pool }), '<p class="sub">' + t(help) + "</p>" +
+    (role === "data" ? "<label>" + t("Layout") + '<select name="layout">' + LAYOUT_LABELS.map(([v, l]) => '<option value="' + v + '"' + (v === same ? " selected" : "") + ">" + t(l) + "</option>").join("") + "</select></label>" +
+      (first ? '<p class="sub">' + t("Existing groups: {layout} of {n} disks.", { layout: same, n: leaves(first).length }) + "</p>" : "") : "") +
+    '<p class="sub">' + t("Only blank disks are offered. <b>The chosen disks will be completely erased.</b>") + "</p>" + diskChoice("checkbox", "d") + confirmPool(pool), t("Add"), true);
+  if (fd) mg({ op: "vdev_add", pool, role, layout: fd.get("layout") || "", disks: fd.getAll("d"), confirm: fd.get("confirm") }, t("Added to {pool}", { pool }));
+}
+async function vdevRemove(pool, dev, role) {
+  const fd = await ask(t("Remove {dev} from {pool}?", { dev, pool }), "<p>" + t(role === "logs" ? "Synchronous writes go back to the pool's own disks (slower). No data is lost."
+    : role === "cache" ? "Reads are served by the pool's disks and the memory cache. No data is lost." : "The pool no longer has this spare disk.") + "</p>" +
+    '<p class="sub">' + t("The disk keeps its ZFS label: it is offered again as a free disk only once erased (wipefs -a).") + "</p>", t("Remove"), true);
+  if (fd) mg({ op: "vdev_remove", pool, device: dev }, t("{dev} removed from {pool}", { dev, pool }));
+}
+async function raidzExpand(pool) {
+  const [root] = poolTree(S.statusOf[pool] || ""), groups = (root ? root.children : []).filter(v => /^raidz/.test(v.name));
+  if (!M.free_disks.length) return noFreeDisk(t("Expand a RAIDZ group of {pool}", { pool }));
+  const fd = await ask(t("Expand a RAIDZ group of {pool}", { pool }),
+    '<p class="sub">' + t("One more disk in the group (OpenZFS 2.3 or later). The data is spread again in the background, the pool stays usable; progress shows here. <b>This cannot be undone.</b> Data written before keeps its old parity ratio until rewritten, so part of the new space shows only then. The disk must be at least as large as the others and <b>will be completely erased</b>.") + "</p>" +
+    "<label>" + t("Group") + '<select name="vdev">' + groups.map(v => "<option>" + esc(v.name) + "</option>").join("") + "</select></label>" + diskChoice("radio", "new") + confirmPool(pool), t("Expand"), true);
+  if (fd) mg({ op: "raidz_expand", pool, vdev: fd.get("vdev"), new: fd.get("new"), confirm: fd.get("confirm") }, t("Expansion started on {pool}", { pool }));
+}
+
+// Export / import / feature upgrade / trim.
+async function exportPool(pool) {
+  const fd = await ask(t("Export {pool}?", { pool }), "<p>" + t("The pool is cleanly detached from this server: its datasets are unmounted and it leaves the page until it is imported again, here or on another machine (move the disks).") + "</p>" +
+    '<p class="sub">' + t("Refused while a share, an export or a replication uses it, or while its files are open.") + "</p>" + confirmPool(pool), t("Export"), true);
+  if (fd) mg({ op: "pool_export", pool, confirm: fd.get("confirm") }, t("Pool {name} exported", { name: pool }));
+}
+async function importPool() {
+  let list = [];
+  try { list = JSON.parse(await get("/api/importable")); } catch (e) { return banner(t("Failed: {err}", { err: e.message })); }
+  if (!list.length) return ask(t("Import a pool"), "<p>" + t("No pool to import: the disks of an exported pool show up here once plugged in.") + "</p>", t("Close"));
+  const fd = await ask(t("Import a pool"), '<fieldset class="swatches"><legend>' + t("Pools found on the disks") + "</legend>" + list.map((p, i) =>
+    '<label class="swatch"><input type="radio" name="id" required value="' + esc(p.id) + '"' + (i ? "" : " checked") + ">" + esc(p.name) + " · " + esc(p.state) + "</label>").join("") + "</fieldset>" +
+    list.map(p => '<pre class="sub">' + esc(p.text) + "</pre>").join("") +
+    '<p class="sub">' + t("A pool still in use by another machine (not exported there) is not imported from the panel.") + "</p>", t("Import"));
+  const p = fd && list.find(x => x.id === fd.get("id"));
+  if (p) mg({ op: "pool_import", id: p.id }, t("Pool {name} imported", { name: p.name }));
+}
+async function upgradePool(pool) {
+  const fd = await ask(t("Enable the new ZFS features on {pool}?", { pool }), "<p>" + t("Every feature of this server's ZFS version is enabled on the pool. <b>This cannot be undone: older systems (an older Debian, another NAS, a rescue disk) can no longer import the pool.</b> The data stays as it is.") + "</p>" +
+    confirmPool(pool), t("Enable"), true);
+  if (fd) mg({ op: "pool_upgrade", pool, confirm: fd.get("confirm") }, t("ZFS features enabled on {pool}", { pool }));
+}
+async function trimPool(pool) {
+  const fd = await ask(t("Trim {pool} now?", { pool }), "<p>" + t("TRIM tells the SSDs which blocks are free, which keeps their write speed up. It runs in the background; disks that do not support it are skipped.") + "</p>", t("Trim now"));
+  if (fd) mg({ op: "pool_trim", pool }, t("Trim started on {pool}", { pool }));
+}
+
 // Disk replacement (features.disks): offline and replace need the pool name retyped.
 const confirmPool = pool => "<label>" + t("Confirmation: retype the pool name") + '<input name="confirm" required autocomplete="off"></label>';
 async function diskOffline(pool, dev) {
@@ -1234,6 +1341,14 @@ document.addEventListener("click", e => {
     case "iscsi-stop": return iscsiStop(d.ds);
     case "ds-del": return destroyDataset(d.ds);
     case "pool-del": return destroyPool(d.pool);
+    case "pool-import": return importPool();
+    case "pool-export": return exportPool(d.pool);
+    case "pool-upgrade": return upgradePool(d.pool);
+    case "pool-trim": return trimPool(d.pool);
+    case "pool-autotrim": return mg({ op: "pool_autotrim", pool: d.pool, on: d.on === "1" }, d.on === "1" ? t("Automatic trim on for {pool}", { pool: d.pool }) : t("Automatic trim off for {pool}", { pool: d.pool }));
+    case "vdev-add": return vdevForm(d.pool, d.role);
+    case "vdev-del": return vdevRemove(d.pool, d.dev, d.role);
+    case "raidz-expand": return raidzExpand(d.pool);
     case "disk-offline": return diskOffline(d.pool, d.dev);
     case "disk-online": return mg({ op: "disk_online", pool: d.pool, device: d.dev }, t("{dev} is back online", { dev: d.dev }));
     case "disk-replace": return diskReplace(d.pool, d.dev);

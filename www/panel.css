@@ -328,6 +328,7 @@ dialog.is-open::backdrop { opacity: 1; transition-duration: var(--modal-open-dur
 dialog label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 dialog input:not([type=radio]):not([type=checkbox]), dialog select, dialog textarea { padding: 6px 10px; border: 1px solid var(--control); border-radius: 6px; background: var(--panel); }
 dialog label.check { flex-direction: row; align-items: center; gap: 8px; }
+dialog pre { white-space: pre; overflow-x: auto; max-height: 30vh; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 16px 0 0; }
 fieldset.swatches { border: 1px solid var(--line); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px; margin: 0 0 12px; }
 fieldset.swatches legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
@@ -380,3 +381,4 @@ fieldset.rows legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
 .client:has(> span) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 dialog .client input, dialog .client select { min-width: 0; }
 dialog { width: min(560px, calc(100vw - 32px)); }
+.card > button + p.sub { margin-top: 8px; }

@@ -47,7 +47,9 @@ Demo data.
 - **Dashboards**: read-only JSON summary for Homepage and the like.
 
 Optional (off by default): creating and deleting datasets, volumes and
-pools (`features.pools`, see below); replacing a pool's disks
+pools, growing, exporting, importing and upgrading pools (`features.pools`,
+see below); log, cache and spare devices and trim (`features.vdevs`);
+replacing a pool's disks
 (`features.disks`); pull replication between two Cairn machines
 (`features.replication`); iSCSI export of volumes (`features.iscsi`), see
 below.
@@ -71,6 +73,35 @@ warns:
 
 Never `-f` or `-R`: a busy mount, a hold or a clone makes `zfs` refuse, and
 its message is shown. Every deletion is in the action journal.
+
+## Pool layout and maintenance (`features.vdevs`, `features.pools`)
+
+Each pool card in **Storage** shows its ashift, automatic trim and whether
+ZFS features are left to enable; its log, cache and spare devices show in
+the pool summary and, with their role, as cards of their own in **Disks**.
+Under *Layout and maintenance*:
+
+- With `features.vdevs` (reversible changes only): *Add a log device
+  (SLOG)*, one disk or two to three mirrored; *Add a cache device (L2ARC)*;
+  *Add a spare disk*; *Remove from the pool* on a log, cache or spare card
+  (`zpool remove`; a spare standing in for a failed disk is refused); *Trim
+  now* and automatic trim on or off. A SLOG only helps synchronous writes
+  (NFS, VMs, databases) and should be an SSD with power-loss protection: the
+  page says so, it cannot check it.
+- With `features.pools` (also the above): *Add a data group* (the existing
+  groups' layout is offered first; a group with less redundancy than the
+  existing ones is refused, the rest is left to `zpool add`'s own checks,
+  never `-f`); *Expand a RAIDZ group* by one disk (`zpool attach`, OpenZFS
+  2.3 or later, the pool's `raidz_expansion` feature must be enabled;
+  progress shows like a resilver); *Export* (refused while a share, an
+  export or a replication uses the pool); *Import a pool* from the pools
+  `zpool import` finds, by id, never forced (a pool not exported by another
+  machine stays there); *Enable new ZFS features* (`zpool upgrade`, after a
+  warning that older systems can no longer import the pool).
+
+Adding needs blank disks, the pool name typed again, and erases the chosen
+disks. A removed device keeps its ZFS label: it is offered as a free disk
+again only once erased (`wipefs -a`).
 
 ## iSCSI export of volumes (`features.iscsi`)
 
@@ -173,7 +204,7 @@ with your own if you have one.
 | `tls` | `{cert, key}` (PEM): HTTPS, required with `login` |
 | `trusted_proxies`, `user_header`, `groups_header`, `require_groups` | proxy mode |
 | `services` | systemd units shown and restartable |
-| `features` | `{nfs, smb, users, pools, disks, replication}`: allowed writes |
+| `features` | `{nfs, smb, users, pools, vdevs, disks, replication, iscsi}`: allowed writes |
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
 | `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in the Backup view (and an Overview tile) with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |

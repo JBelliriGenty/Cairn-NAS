@@ -7,12 +7,16 @@ fast	allocated	122459185152	-
 fast	free	3863270465536	-
 fast	fragmentation	1	-
 fast	capacity	3	-
+fast	ashift	12	local
+fast	autotrim	on	local
 tank	health	ONLINE	-
 tank	size	20478404067328	-
 tank	allocated	505079054336	-
 tank	free	19973325012992	-
 tank	fragmentation	0	-
 tank	capacity	2	-
+tank	ashift	12	local
+tank	autotrim	off	default
 @@
   pool: fast
  state: ONLINE
@@ -25,11 +29,18 @@ config:
 	    nvme-Fanxiang_S690Q_1TB_DEMO0007  ONLINE       0     0     0
 	    nvme-Fanxiang_S690Q_1TB_DEMO0008  ONLINE       0     0     0
 	    nvme-Fanxiang_S690Q_1TB_DEMO0009  ONLINE       0     0     0
+	logs	
+	  ata-INTEL_SSDSC2BB120G4_DEMO0010             ONLINE       0     0     0
 
 errors: No known data errors
 
   pool: tank
  state: ONLINE
+status: Some supported and requested features are not enabled on the pool.
+	The pool can still be used, but some features are unavailable.
+action: Enable all features using 'zpool upgrade'. Once this is done,
+	the pool may no longer be accessible by software that does not support
+	the features. See zpool-features(7) for details.
 config:
 
 	NAME                            STATE     READ WRITE CKSUM
@@ -40,6 +51,10 @@ config:
 	    ata-ORICO_DEMO0003  ONLINE       0     0     0
 	    ata-ORICO_DEMO0004  ONLINE       0     0     0
 	    ata-ORICO_DEMO0005  ONLINE       0     0     0
+	cache
+	  ata-Samsung_SSD_870_EVO_500GB_DEMO0011  ONLINE       0     0     0
+	spares
+	  ata-ORICO_DEMO0012            AVAIL   
 
 errors: No known data errors
 @@
@@ -187,6 +202,9 @@ sdb|ORICO
 sdc|ORICO
 sdd|ORICO
 sde|ORICO
+sdh|INTEL SSDSC2BB120G4
+sdi|Samsung SSD 870 EVO 500GB
+sdj|ORICO
 @@
 /tank/photos 192.168.10.51(rw,no_root_squash,no_subtree_check) 192.168.10.53(rw,no_root_squash,no_subtree_check) 192.168.10.54(rw,no_root_squash,no_subtree_check)
 /tank/backups 192.168.10.51(rw,no_root_squash,no_subtree_check) 192.168.10.53(rw,no_root_squash,no_subtree_check) 192.168.10.54(rw,no_root_squash,no_subtree_check)
@@ -262,6 +280,15 @@ nvme-eui.00000000000000000c82d58552000221|nvme1n1
 nvme-eui.00000000000000000c82d58552000296-part1|nvme0n1p1
 nvme-eui.00000000000000000c82d58552000296-part9|nvme0n1p9
 nvme-eui.00000000000000000c82d58552000296|nvme0n1
+ata-INTEL_SSDSC2BB120G4_DEMO0010|sdh
+ata-INTEL_SSDSC2BB120G4_DEMO0010-part1|sdh1
+ata-INTEL_SSDSC2BB120G4_DEMO0010-part9|sdh9
+ata-Samsung_SSD_870_EVO_500GB_DEMO0011|sdi
+ata-Samsung_SSD_870_EVO_500GB_DEMO0011-part1|sdi1
+ata-Samsung_SSD_870_EVO_500GB_DEMO0011-part9|sdi9
+ata-ORICO_DEMO0012|sdj
+ata-ORICO_DEMO0012-part1|sdj1
+ata-ORICO_DEMO0012-part9|sdj9
 @@
 {"capacity":1000204886016,"critical":0,"dev":"nvme0n1","hours":2,"media_errors":0,"model":"Fanxiang S690Q 1TB","passed":true,"realloc":null,"serial":"25121508552000296","spare":100,"spare_thr":1,"temp":42,"unsafe":6,"used":0,"written":362622}
 {"capacity":1000204886016,"critical":0,"dev":"nvme1n1","hours":2,"media_errors":0,"model":"Fanxiang S690Q 1TB","passed":true,"realloc":null,"serial":"25121508552000221","spare":100,"spare_thr":1,"temp":44,"unsafe":6,"used":0,"written":362503}
@@ -273,6 +300,9 @@ nvme-eui.00000000000000000c82d58552000296|nvme0n1
 {"capacity":4096805658624,"critical":null,"dev":"sdc","hours":11099,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"NA2T369V2NP667LV","spare":null,"spare_thr":null,"temp":25,"unsafe":null,"used":null,"written":null}
 {"capacity":4096805658624,"critical":null,"dev":"sdd","hours":11076,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"8MYIJURYNM53T6ZY","spare":null,"spare_thr":null,"temp":27,"unsafe":null,"used":null,"written":null}
 {"capacity":4096805658624,"critical":null,"dev":"sde","hours":11117,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"VPY9D8DWA2CLYRWS","spare":null,"spare_thr":null,"temp":26,"unsafe":null,"used":null,"written":null}
+{"capacity":120034123776,"critical":null,"dev":"sdh","hours":41210,"media_errors":null,"model":"INTEL SSDSC2BB120G4","passed":true,"realloc":0,"serial":"BTWL0000000120BGN","spare":null,"spare_thr":null,"temp":27,"unsafe":null,"used":null,"written":null}
+{"capacity":500107862016,"critical":null,"dev":"sdi","hours":3120,"media_errors":null,"model":"Samsung SSD 870 EVO 500GB","passed":true,"realloc":0,"serial":"S6PXNM0T000011","spare":null,"spare_thr":null,"temp":31,"unsafe":null,"used":null,"written":null}
+{"capacity":4000787030016,"critical":null,"dev":"sdj","hours":15,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"DEMO0012","spare":null,"spare_thr":null,"temp":30,"unsafe":null,"used":null,"written":null}
 @@
 tank/documents	1793689200	17102	93600
 tank/homes	1793689200	17102	93600

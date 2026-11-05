@@ -5,6 +5,10 @@
 - ZFS volumes (zvols) in Storage: list (size, used, ratio, block size), create (thin or reserved, block size, compression) and grow, with `features.pools`.
 - Deletion of datasets, volumes and pools from Storage (`features.pools`): full name retyped, refused while a share, an `/etc/exports` path or a replication uses it, children only when asked, never a pool root, never forced; snapshots go with it.
 - iSCSI export of volumes (`features.iscsi`, LIO through `targetcli`): one target per volume, access only for the listed initiators, restored at boot after the ZFS volumes; an exported volume cannot be deleted.
+- Log (SLOG, single or mirrored), cache (L2ARC) and spare devices: added from blank disks and removed from the page (`features.vdevs`, reversible changes only), shown with their role in Storage and Disks.
+- Pools grow (`features.pools`): a new data group (less redundancy than the existing groups refused, never `-f`) or RAIDZ expansion by one disk (OpenZFS 2.3+), with its progress.
+- Pool export (refused while in use) and import of the pools `zpool import` lists (`features.pools`).
+- Pool properties in Storage: ashift, automatic trim (toggle, `features.vdevs`), ZFS features left to enable (`zpool upgrade` after a warning, `features.pools`), manual trim.
 
 ## 0.1.0 (2026-11-05)
 

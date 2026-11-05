@@ -260,6 +260,49 @@ const DICT = {
     "Sent to {target}: degraded or faulted pool, pool {pct} % full, disk failing SMART or with errors, failed service, late replication. One message when it starts, another when it is back to normal.": "Envoyées à {target} : pool dégradé ou en erreur, pool rempli à {pct} %, disque en échec SMART ou avec erreurs, service en échec, réplication en retard. Un message à l'apparition, un autre au retour à la normale.",
     "No current problems": "Aucun problème en cours", "Test alert sent": "Alerte de test envoyée",
     "{name} restarted": "{name} redémarré",
+    // pool layout: log, cache, spare, data groups, RAIDZ expansion, export/import, features, trim
+    "Log (SLOG)": "Journal (SLOG)", "Cache (L2ARC)": "Cache (L2ARC)", "Spare disk": "Disque de secours", "Special": "Spécial", "Dedup": "Dédup",
+    "Remove from the pool": "Retirer du pool", "RAIDZ expansion": "Extension RAIDZ", "Import a pool": "Importer un pool",
+    "ashift {n} ({size} sectors)": "ashift {n} (secteurs de {size})", "automatic trim: {v}": "trim automatique : {v}", "on": "activé", "off": "désactivé",
+    "ZFS features to enable (zpool upgrade)": "fonctions ZFS à activer (zpool upgrade)", "all ZFS features enabled": "toutes les fonctions ZFS activées", "trim in progress": "trim en cours",
+    "Add a log device (SLOG)": "Ajouter un journal (SLOG)", "Add a cache device (L2ARC)": "Ajouter un cache (L2ARC)", "Add a spare disk": "Ajouter un disque de secours",
+    "Trim now": "Lancer un trim", "Turn automatic trim off": "Désactiver le trim automatique", "Turn automatic trim on": "Activer le trim automatique",
+    "Add a data group": "Ajouter un groupe de données", "Expand a RAIDZ group": "Étendre un groupe RAIDZ", "Enable new ZFS features": "Activer les nouvelles fonctions ZFS",
+    "Layout and maintenance": "Disposition et maintenance",
+    "Add a log device (SLOG) to {pool}": "Ajouter un journal (SLOG) à {pool}",
+    "A log device (SLOG) receives the synchronous writes (NFS, virtual machines, databases) on a fast SSD before ZFS writes them to the pool; ordinary writes do not use it. Choose an SSD with power-loss protection (capacitors, found on data-center models such as the Intel S3500): the panel cannot check it, and a consumer SSD without it gives little or no gain. A few GB are used. Two or three disks are mirrored. It can be removed at any time, without losing data.":
+      "Un journal (SLOG) reçoit les écritures synchrones (NFS, machines virtuelles, bases de données) sur un SSD rapide avant que ZFS ne les écrive dans le pool ; les écritures ordinaires ne l'utilisent pas. Choisissez un SSD avec protection contre les coupures de courant (condensateurs, sur les modèles pour centre de données comme l'Intel S3500) : le panneau ne peut pas le vérifier, et un SSD grand public sans cette protection n'apporte que peu ou pas de gain. Quelques Go suffisent. Deux ou trois disques sont mis en miroir. Il peut être retiré à tout moment, sans perte de données.",
+    "Add a cache device (L2ARC) to {pool}": "Ajouter un cache (L2ARC) à {pool}",
+    "A cache device (L2ARC) keeps a copy of often-read data on an SSD, beyond the memory cache (ARC). Useful only when the data read often does not fit in memory; it uses a little memory itself. No redundancy needed: losing it loses no data. It can be removed at any time.":
+      "Un cache (L2ARC) garde une copie des données souvent lues sur un SSD, en plus du cache en mémoire (ARC). Utile seulement quand les données souvent lues ne tiennent pas en mémoire ; il consomme lui-même un peu de mémoire. Pas besoin de redondance : le perdre ne perd aucune donnée. Il peut être retiré à tout moment.",
+    "Add a spare disk to {pool}": "Ajouter un disque de secours à {pool}",
+    "A spare disk waits unused; when a disk of the pool fails, ZFS puts the spare in its place and rebuilds onto it. It must be at least as large as the pool's disks. It can be removed while unused.":
+      "Un disque de secours attend sans servir ; quand un disque du pool tombe en panne, ZFS le met à sa place et reconstruit dessus. Il doit être au moins aussi grand que les disques du pool. Il peut être retiré tant qu'il ne sert pas.",
+    "Add a data group to {pool}": "Ajouter un groupe de données à {pool}",
+    "The pool grows by a new group of disks; new data is spread over all the groups. <b>This cannot be undone</b>: a pool with a RAIDZ group can never lose a group. Use the same layout and disk size as the existing groups; zpool refuses a different redundancy level.":
+      "Le pool s'agrandit d'un nouveau groupe de disques ; les nouvelles données sont réparties sur tous les groupes. <b>C'est définitif</b> : un pool avec un groupe RAIDZ ne peut jamais perdre un groupe. Utilisez la même disposition et la même taille de disque que les groupes existants ; zpool refuse un niveau de redondance différent.",
+    "Existing groups: {layout} of {n} disks.": "Groupes existants : {layout} de {n} disques.", "Add": "Ajouter", "Added to {pool}": "Ajouté à {pool}",
+    "Remove {dev} from {pool}?": "Retirer {dev} de {pool} ?", "Remove": "Retirer", "{dev} removed from {pool}": "{dev} retiré de {pool}",
+    "Synchronous writes go back to the pool's own disks (slower). No data is lost.": "Les écritures synchrones retournent sur les disques du pool (plus lent). Aucune donnée n'est perdue.",
+    "Reads are served by the pool's disks and the memory cache. No data is lost.": "Les lectures sont servies par les disques du pool et le cache en mémoire. Aucune donnée n'est perdue.",
+    "The pool no longer has this spare disk.": "Le pool n'a plus ce disque de secours.",
+    "The disk keeps its ZFS label: it is offered again as a free disk only once erased (wipefs -a).": "Le disque garde son étiquette ZFS : il n'est proposé de nouveau comme disque libre qu'une fois effacé (wipefs -a).",
+    "Expand a RAIDZ group of {pool}": "Étendre un groupe RAIDZ de {pool}", "Group": "Groupe", "Expand": "Étendre", "Expansion started on {pool}": "Extension lancée sur {pool}",
+    "One more disk in the group (OpenZFS 2.3 or later). The data is spread again in the background, the pool stays usable; progress shows here. <b>This cannot be undone.</b> Data written before keeps its old parity ratio until rewritten, so part of the new space shows only then. The disk must be at least as large as the others and <b>will be completely erased</b>.":
+      "Un disque de plus dans le groupe (OpenZFS 2.3 ou plus récent). Les données sont redistribuées en arrière-plan, le pool reste utilisable ; l'avancement s'affiche ici. <b>C'est définitif.</b> Les données déjà écrites gardent leur ancien rapport de parité jusqu'à leur réécriture : une partie de l'espace gagné n'apparaît qu'alors. Le disque doit être au moins aussi grand que les autres et <b>sera entièrement effacé</b>.",
+    "Export {pool}?": "Exporter {pool} ?", "Pool {name} exported": "Pool {name} exporté",
+    "The pool is cleanly detached from this server: its datasets are unmounted and it leaves the page until it is imported again, here or on another machine (move the disks).":
+      "Le pool est détaché proprement de ce serveur : ses datasets sont démontés et il quitte la page jusqu'à ce qu'il soit importé de nouveau, ici ou sur une autre machine (en y déplaçant les disques).",
+    "No pool to import: the disks of an exported pool show up here once plugged in.": "Aucun pool à importer : les disques d'un pool exporté apparaissent ici une fois branchés.",
+    "Pools found on the disks": "Pools trouvés sur les disques", "Import": "Importer", "Pool {name} imported": "Pool {name} importé",
+    "A pool still in use by another machine (not exported there) is not imported from the panel.": "Un pool encore utilisé par une autre machine (non exporté là-bas) n'est pas importé depuis le panneau.",
+    "Enable the new ZFS features on {pool}?": "Activer les nouvelles fonctions ZFS sur {pool} ?", "Enable": "Activer", "ZFS features enabled on {pool}": "Fonctions ZFS activées sur {pool}",
+    "Every feature of this server's ZFS version is enabled on the pool. <b>This cannot be undone: older systems (an older Debian, another NAS, a rescue disk) can no longer import the pool.</b> The data stays as it is.":
+      "Toutes les fonctions de la version de ZFS de ce serveur sont activées sur le pool. <b>C'est définitif : des systèmes plus anciens (une Debian plus ancienne, un autre NAS, un disque de secours) ne pourront plus importer le pool.</b> Les données restent telles quelles.",
+    "Trim {pool} now?": "Lancer un trim sur {pool} ?", "Trim started on {pool}": "Trim lancé sur {pool}",
+    "TRIM tells the SSDs which blocks are free, which keeps their write speed up. It runs in the background; disks that do not support it are skipped.":
+      "Le TRIM indique aux SSD les blocs libres, ce qui maintient leur vitesse d'écriture. Il tourne en arrière-plan ; les disques qui ne le gèrent pas sont ignorés.",
+    "Automatic trim on for {pool}": "Trim automatique activé sur {pool}", "Automatic trim off for {pool}": "Trim automatique désactivé sur {pool}",
     // sign-in
     "Sign-in": "Connexion", "Sign in": "Se connecter",
     "A server account that belongs to the administration group.": "Compte du serveur membre du groupe d'administration.",
