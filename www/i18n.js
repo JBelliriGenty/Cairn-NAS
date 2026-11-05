@@ -400,7 +400,8 @@ const DICT = {
     "No more copies are made; those already in the repository stay there.": "Plus aucune copie n'est faite ; celles déjà dans le dépôt y restent.",
     "Backup of {name} stopped": "Sauvegarde de {name} arrêtée", "Backup of {name} started": "Sauvegarde de {name} lancée",
     // machines (other Cairn instances)
-    "Machines": "Machines", "Connected machines": "Machines connectées", "Unreachable for {d}": "Injoignable depuis {d}", "unreachable": "injoignable", "not checked yet": "pas encore interrogée",
+    "Machines": "Machines", "Connected machines": "Machines connectées", "Machine": "Machine", "read-only view": "consultation seule",
+    "Read-only: this is another machine. Open its own page to change it.": "Consultation seule : c'est une autre machine. Ouvrez sa propre page pour la modifier.", "Unreachable for {d}": "Injoignable depuis {d}", "unreachable": "injoignable", "not checked yet": "pas encore interrogée",
     "{n} problem": "{n} problème", "{n} problems": "{n} problèmes", "no problem": "aucun problème",
     "Unreachable since {time} ({d})": "Injoignable depuis le {time} ({d})", "Not checked yet.": "Pas encore interrogée.",
     "this machine": "cette machine", "Open": "Ouvrir", "Last known state:": "Dernier état connu :", "Problems": "Problèmes",

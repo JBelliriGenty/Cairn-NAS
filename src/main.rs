@@ -407,6 +407,13 @@ fn summary(cfg: &Config) -> Value {
     summary_json(&cmd(&["zpool", "list", "-H", "-p", "-o", "name,health,capacity,size,alloc"]), &p, &hwmon())
 }
 
+fn config_json(cfg: &Config, user: &str) -> Value {
+    let mut c = cfg.public.clone();
+    c["user"] = json!(user);
+    c["ui"] = load_ui(&cfg.state_file);
+    c
+}
+
 /// `?full=1` adds what another Cairn shows on its Overview (peers::full).
 fn summary_for(cfg: &Config, r: &Request) -> Value {
     let mut s = summary(cfg);
@@ -2440,10 +2447,19 @@ fn handle(cfg: &Config, mut r: Request) {
     if path == "/icon.svg" {
         return respond(r, 200, ICON.into(), "image/svg+xml"); // public: tab icon, dashboards
     }
-    if let (Some(t), Method::Get, "/api/summary") = (&cfg.summary_token, r.method(), path.as_str()) {
+    // The bearer token opens the read-only data only: the summary (dashboards),
+    // and the page data another Cairn shows in its machine selector.
+    if let (Some(t), Method::Get, "/api/summary" | "/api/config" | "/api/fast" | "/api/slow") = (&cfg.summary_token, r.method(), path.as_str()) {
         if header(&r, "Authorization").strip_prefix("Bearer ").is_some_and(|b| ct_eq(b, t)) {
-            let body = summary_for(cfg, &r).to_string();
-            return respond(r, 200, body, "application/json");
+            return match path.as_str() {
+                "/api/summary" => {
+                    let body = summary_for(cfg, &r).to_string();
+                    respond(r, 200, body, "application/json")
+                }
+                "/api/config" => respond(r, 200, config_json(cfg, "").to_string(), "application/json"),
+                "/api/fast" => respond(r, 200, fast(), "text/plain"),
+                _ => respond(r, 200, slow(cfg), "text/plain"),
+            };
         }
     }
     if let Some(l) = &cfg.login {
@@ -2474,12 +2490,11 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Get, "/panel.js") => respond(r, 200, JS.into(), "text/javascript"),
         (Method::Get, "/panel.css") => respond(r, 200, CSS.into(), "text/css"),
         (Method::Get, "/i18n.js") => respond(r, 200, I18N.into(), "text/javascript"),
-        (Method::Get, "/api/config") => {
-            let mut c = cfg.public.clone();
-            c["user"] = json!(user);
-            c["ui"] = load_ui(&cfg.state_file);
-            respond(r, 200, c.to_string(), "application/json")
-        }
+        (Method::Get, "/api/config") => respond(r, 200, config_json(cfg, &user).to_string(), "application/json"),
+        (Method::Get, p) if p.starts_with("/api/peer/") => match peers::proxy(cfg, p, &user) {
+            Ok((body, ctype)) => respond(r, 200, body, ctype),
+            Err((code, e)) => respond(r, code, err(&e), "application/json"),
+        },
         (Method::Get, "/api/fast") => respond(r, 200, fast(), "text/plain"),
         (Method::Get, "/api/summary") => {
             let body = summary_for(cfg, &r).to_string();
@@ -2594,6 +2609,21 @@ fn demo(mut r: Request) {
         (Method::Get, "/api/slow") => respond(r, 200, include_str!("../demo/slow.txt").into(), "text/plain"),
         (Method::Get, "/api/manage") => respond(r, 200, include_str!("../demo/manage.json").into(), jsn),
         (Method::Get, "/api/peers") => respond(r, 200, include_str!("../demo/peers.json").into(), jsn),
+        // The selector shows this same sample data under the peer's name: no real HTTP in the demo.
+        (Method::Get, p) if p.starts_with("/api/peer/") => {
+            let (name, what) = p["/api/peer/".len()..].split_once('/').unwrap_or(("", ""));
+            match what {
+                "config" => {
+                    let mut c: Value = serde_json::from_str(include_str!("../demo/config.json")).unwrap_or_default();
+                    c["title"] = json!(name);
+                    c["user"] = json!("demo");
+                    respond(r, 200, c.to_string(), jsn)
+                }
+                "fast" => respond(r, 200, DEMO_FAST[DEMO_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % DEMO_FAST.len()].into(), "text/plain"),
+                "slow" => respond(r, 200, include_str!("../demo/slow.txt").into(), "text/plain"),
+                _ => respond(r, 404, tr(lang, "not found"), "text/plain"),
+            }
+        }
         (Method::Get, "/api/importable") => respond(r, 200, json!(parse_importable(include_str!("../demo/import.txt"))).to_string(), jsn),
         (Method::Get, "/api/browse" | "/api/download") => restore::demo_serve(r, &path),
         (Method::Get, "/api/backups") => offsite::demo_serve(r),

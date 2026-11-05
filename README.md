@@ -18,10 +18,6 @@ page embedded: no database, no third-party JavaScript, a few MB of RAM.
 <tr><td align="center">Storage</td><td align="center">Shares</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/disques-dark.png"><img src="docs/screenshots/disques-light.png" alt="Disks: per-pool activity, temperature, SMART health"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/services-dark.png"><img src="docs/screenshots/services-light.png" alt="Services, alerts, updates and action journal"></picture></td></tr>
 <tr><td align="center">Disks</td><td align="center">Services</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/sauvegarde-dark.png"><img src="docs/screenshots/sauvegarde-light.png" alt="Backup: replication state, off-site restic repositories and backups"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/restaurer-dark.png"><img src="docs/screenshots/restaurer-light.png" alt="Restore: browsing a snapshot, download or copy back a file or folder"></picture></td></tr>
-<tr><td align="center">Backup</td><td align="center">Restore</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/machines-dark.png"><img src="docs/screenshots/machines-light.png" alt="Machines: the other Cairn NAS instances with their pools, problems and temperature"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/reseau-dark.png"><img src="docs/screenshots/reseau-light.png" alt="Network: every interface with its link, speed and live traffic"></picture></td></tr>
-<tr><td align="center">Machines</td><td align="center">Network</td></tr>
 </table>
 
 Screenshots follow your GitHub theme (light or dark); the panel has both.
@@ -283,7 +279,14 @@ the peer (it must be allowed to: the peer's firewall, and its
 `trusted_proxies` do not matter since the token is enough); `link` is what the
 browser opens, e.g. behind a reverse proxy. A peer unreachable for longer than
 `peer_unreachable_minutes` (15) is alerted; its own problems are not, each
-machine alerts on its own. The token opens nothing but `/api/summary`.
+machine alerts on its own.
+
+A machine selector (under the title) shows any page of a peer, read-only:
+this server relays the peer's `/api/config`, `/api/fast` and `/api/slow`
+(`/api/peer/<name>/…`), the action buttons are hidden and every write is
+refused. So the summary token opens these three read-only endpoints too
+(dataset and snapshot names, addresses, exports): never anything that
+changes the machine, nor `/api/manage`.
 
 ## Try it
 

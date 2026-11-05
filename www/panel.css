@@ -408,3 +408,6 @@ td.actions a.btn + button { margin-left: 6px; }
 .peer-ov .card-head { margin-bottom: 0; }
 .peer-ov .verdict { font-size: 14px; margin: 10px 0 0; padding: 8px 12px; }
 .peer-ov .tiles { margin-top: 10px; }
+#machine { margin: 0 8px; }
+/* Another machine (selector): read-only, no action controls. */
+.remote main [data-act], .remote main [data-edit-item], .remote [data-act="tags"], .remote #storage-actions { display: none; }

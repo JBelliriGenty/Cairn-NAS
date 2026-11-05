@@ -166,11 +166,17 @@ pub(crate) fn problems(cfg: &Config, out: &mut BTreeMap<String, String>) {
 }
 
 fn fetch(p: &Peer) -> Result<Value, String> {
+    parse_summary(&get(p, "/api/summary?full=1", 262144)?)
+}
+
+/// GET <peer>/<path> with its token, body at most `max` bytes.
+fn get(p: &Peer, path: &str, max: u64) -> Result<String, String> {
     use std::io::Write;
     use std::process::Stdio;
-    let url = format!("{}/api/summary?full=1", p.url);
+    let url = format!("{}{path}", p.url);
+    let max = max.to_string();
     let mut child = Command::new("curl")
-        .args(["-fsS", "-m", "8", "--max-filesize", "262144", "--proto", "=http,https", "-K", "-", &url])
+        .args(["-fsS", "-m", "8", "--max-filesize", &max, "--proto", "=http,https", "-K", "-", &url])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|e| format!("curl: {e}"))?;
     if let Some(mut pipe) = child.stdin.take() {
@@ -180,7 +186,22 @@ fn fetch(p: &Peer) -> Result<Value, String> {
     if !o.status.success() {
         return Err(String::from_utf8_lossy(&o.stderr).trim().trim_start_matches("curl: ").to_string());
     }
-    parse_summary(&String::from_utf8_lossy(&o.stdout))
+    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// The peer's page data for the machine selector: GET /api/peer/<name>/<config|fast|slow>,
+/// fetched on demand (read-only endpoints its token opens). Returns (body, content type).
+pub(crate) fn proxy(cfg: &Config, path: &str, user: &str) -> Result<(String, &'static str), (u16, String)> {
+    let (name, what) = path.strip_prefix("/api/peer/").and_then(|r| r.split_once('/')).ok_or((404, "not found".to_string()))?;
+    let p = cfg.peers.iter().find(|p| p.name == name).ok_or((404, "not found".to_string()))?;
+    let ctype = match what { "config" => "application/json", "fast" | "slow" => "text/plain", _ => return Err((404, "not found".into())) };
+    let body = get(p, &format!("/api/{what}"), 16 << 20).map_err(|e| (502, e))?;
+    if what != "config" {
+        return Ok((body, ctype));
+    }
+    let mut c: Value = serde_json::from_str(&body).map_err(|_| (502, "invalid summary".to_string()))?;
+    c["user"] = json!(user);
+    Ok((c.to_string(), ctype))
 }
 
 /// Background loop: polls every peer in parallel every POLL_S.

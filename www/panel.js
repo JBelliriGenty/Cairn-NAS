@@ -21,6 +21,10 @@ let UI = { labels: {}, tags: {}, assign: {} };
 const hist = { cpu: [], net: {}, disk: {} };
 let prev = null, F = null, S = null, P = null, animUntil = 0, VIEW = null;
 const openGroups = new Set();
+// Machine selector: "" = this machine; else a peer's name, whose page data this
+// server relays (/api/peer/<name>/…), read-only.
+const MACHINE = new URLSearchParams(location.search).get("m") || "";
+const REMOTE_PATHS = ["/api/config", "/api/fast", "/api/slow"];
 
 /* ---------- helpers ---------- */
 
@@ -101,6 +105,7 @@ function toast(msg) {
 
 // Accept-Language: the server answers its error messages in the page's language.
 async function get(path) {
+  if (MACHINE && REMOTE_PATHS.includes(path)) path = "/api/peer/" + encodeURIComponent(MACHINE) + path.slice(4);
   const r = await fetch(path, { cache: "no-store", redirect: "manual", headers: { "Accept-Language": LANG } });
   // Session expired: back to the sign-in form (built-in 401, or the proxy's redirect to its portal).
   if ((r.status === 401 && S) || r.type === "opaqueredirect") location.reload();
@@ -108,6 +113,7 @@ async function get(path) {
   return r.text();
 }
 async function post(path, payload) {
+  if (MACHINE && path !== "/api/logout") throw new Error(t("Read-only: this is another machine. Open its own page to change it."));
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "Accept-Language": LANG }, body: JSON.stringify(payload), redirect: "manual" });
   if (r.type === "opaqueredirect") location.reload();
   const res = await r.json().catch(() => ({ error: r.status + " " + r.statusText }));
@@ -363,7 +369,7 @@ const worst = lvls => (lvls.includes("bad") ? "bad" : lvls.includes("warn") ? "w
 
 function renderChrome() {
   const down = S.services.filter(([, st]) => st !== "active");
-  $("pills").innerHTML = Object.values(S.pools).map(p =>
+  $("pills").innerHTML = (MACHINE ? '<span class="pill warn">' + t("read-only view") + "</span>" : "") + Object.values(S.pools).map(p =>
     '<span class="pill ' + (p.health === "ONLINE" ? "ok" : "bad") + '">' + esc(poolName(p.name)) + " " + esc(p.health) + "</span>").join("") +
     '<span class="pill ' + (down.length ? "warn" : "ok") + '">' + (down.length ? tp(down.length, "{n} service stopped", "{n} services stopped") : t("services OK")) + "</span>";
   $("meta").textContent = [S.host, t("kernel {v}", { v: S.kernel }), t("up for {d}", { d: duration(F.up) }), t("refreshed {time}", { time: new Date().toLocaleTimeString(LOCALE()) })].join(" · ");
@@ -447,7 +453,7 @@ function renderOverview() {
         : t("Oldest last snapshot: {age}", { age: duration(oldest) })) + "</p>") : "",
   ].join("");
   // The other Cairn instances, apart from this machine's own tiles.
-  const peers = (P || []).filter(m => !m.self);
+  const peers = MACHINE ? [] : (P || []).filter(m => !m.self);
   $("ov-machines-h").hidden = !peers.length;
   $("ov-machines").innerHTML = peers.map(peerOverview).join("");
   // Secondary facts: one line of links instead of half-empty tiles.
@@ -826,6 +832,10 @@ function peerOverview(m) {
 }
 function renderMachines() {
   document.querySelector('#nav [data-view="machines"]').hidden = !FEAT().peers;
+  const sel = $("machine");
+  sel.hidden = !P;
+  if (P && sel.options.length !== P.length) sel.innerHTML = P.map(m => '<option value="' + esc(m.self ? "" : m.name) + '">' + esc(m.name) + "</option>").join("");
+  sel.value = MACHINE;
   if (!P) return void ($("machines").innerHTML = FEAT().peers ? '<p class="sub">' + t("Loading…") + "</p>" : "");
   $("machines").innerHTML = P.map(m => {
     const s = m.summary, lvl = machineLvl(m);
@@ -1734,6 +1744,10 @@ document.addEventListener("toggle", e => {
   const g = e.target.dataset && e.target.dataset.group;
   if (g) e.target.open ? openGroups.add(g) : openGroups.delete(g);
 }, true);
+$("machine").addEventListener("change", e => {
+  const m = e.target.value;
+  location.href = location.pathname + (m ? "?m=" + encodeURIComponent(m) : "") + location.hash;
+});
 window.addEventListener("hashchange", () => show(location.hash.slice(1)));
 // A re-render between pointerdown and click would swallow the click: hold renders briefly.
 document.addEventListener("pointerdown", () => { animUntil = Math.max(animUntil, Date.now() + 500); });
@@ -1758,6 +1772,8 @@ $("meta").textContent = t("Loading…");
 setLang(LANG); // static text first: the sign-in form may come before /api/config
 get("/api/config").then(txt => {
   CFG = JSON.parse(txt);
+  // Another machine: its data only, nothing to change from here (the selector stays this server's).
+  if (MACHINE) { CFG.features = { peers: true }; document.body.classList.add("remote"); }
   $("logout").hidden = !FEAT().login;
   UI = Object.assign({ labels: {}, tags: {}, assign: {} }, CFG.ui);
   document.title = CFG.title + " · Cairn";
