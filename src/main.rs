@@ -1348,9 +1348,16 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
         "updates_apply" => {
             // Held packages (apt-mark hold) stay as they are; existing config files are kept.
             let pkgs = updates()["packages"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")).unwrap_or_default();
-            run(&["apt-get", "update", "-q"], None)?;
-            let res = run(&["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confdef",
-                "-o", "Dpkg::Options::=--force-confold", "upgrade", "--with-new-pkgs"], None);
+            // In a transient unit: the service's ProtectSystem makes /usr read-only, so dpkg
+            // cannot write there from inside it. dpkg --configure -a finishes an interrupted run.
+            let host = |argv: &[&str]| {
+                let mut a = vec!["systemd-run", "--wait", "--pipe", "--quiet", "--collect", "--setenv=DEBIAN_FRONTEND=noninteractive"];
+                a.extend_from_slice(argv);
+                run(&a, None)
+            };
+            host(&["apt-get", "update", "-q"])?;
+            let res = host(&["dpkg", "--configure", "-a"]).and_then(|()| host(&["apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confdef",
+                "-o", "Dpkg::Options::=--force-confold", "upgrade", "--with-new-pkgs"]));
             *UPDATES.lock().unwrap_or_else(|e| e.into_inner()) = None;
             res?;
             Ok(format!("op=updates_apply packages={pkgs}"))

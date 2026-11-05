@@ -442,12 +442,21 @@ function renderOverview() {
     tile("services", t("Services"), t("{up} / {total} active", { up: S.services.length - down.length, total: S.services.length }), down.length ? "warn" : "ok",
       '<div class="svcdots">' + S.services.map(([n, st]) => '<span class="dot ' + (st === "active" ? "ok" : "bad") + '" title="' + esc(t("{name}: {value}", { name: n, value: st })) + '"></span>').join("") + "</div>" +
       (down.length ? '<p class="sub">' + t("Stopped: {list}", { list: down.map(([n]) => esc(n)).join(", ") }) + "</p>" : "")),
-    P ? tile("machines", t("Machines"), t("{ok} / {total} OK", { ok: P.filter(m => machineLvl(m) === "ok").length, total: P.length }), worst(P.map(machineLvl)),
-      '<div class="svcdots">' + P.map(m => '<span class="dot ' + machineLvl(m) + '" title="' + esc(t("{name}: {value}", { name: m.name, value: machineState(m) })) + '"></span>').join("") + "</div>") : "",
     S.replication.length ? tile("sauvegarde", t("Replication"), t("{ok} / {total} up to date", { ok: S.replication.length - lateRepl.length, total: S.replication.length }),
       lateRepl.length ? "bad" : "ok", '<p class="sub">' + (lateRepl.length ? t("Late: {list}", { list: lateRepl.map(([ds]) => esc(ds)).join(", ") })
         : t("Oldest last snapshot: {age}", { age: duration(oldest) })) + "</p>") : "",
   ].join("");
+  // The other Cairn instances, apart from this machine's own tiles.
+  const peers = (P || []).filter(m => !m.self);
+  $("ov-machines-h").hidden = !peers.length;
+  $("ov-machines").innerHTML = peers.map(m => {
+    const s = m.summary;
+    return tile("machines", m.name, machineState(m), machineLvl(m),
+      (!m.ok && m.checked ? '<p class="sub">' + t("Unreachable for {d}", { d: duration(m.down_s) }) + "</p>" : "") +
+      (s ? Object.entries(s.pools).map(([n, p]) => '<div class="meter ' + (p.health !== "ONLINE" ? "bad" : p.capacity >= 80 ? "warn" : "ok") + '"><span>' + esc(n) + " · " + esc(p.health) +
+        '</span><div class="bar"><i data-w="' + p.capacity + '"></i></div><b>' + nf(p.capacity, 0) + " %</b></div>").join("") +
+        (s.temp_max_c != null ? '<p class="sub">' + t("Max temperature") + " " + nf(s.temp_max_c, 0) + " °C</p>" : "") : ""));
+  }).join("");
   // Secondary facts: one line of links instead of half-empty tiles.
   $("facts").innerHTML = [
     ["partages", t("NFS: {exports} exports · {conn} / {clients} clients connected", { exports: S.exports.length, conn, clients: clients.size }), conn ? " ok" : ""],
