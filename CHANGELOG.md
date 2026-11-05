@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-05)
 
 - Fix: *Update* failed with "read-only file system" (the service's `ProtectSystem` keeps `/usr` read-only); apt now runs in a transient unit (`systemd-run`), after `dpkg --configure -a` to finish an interrupted run.
 - Machines view (`peers`): the other Cairn instances at a glance (pools, problems, temperature, reachability, link to their page), with a "Connected machines" row on Overview, read server-side from their `/api/summary` with their token, every 30 s in the background; alert when one stays unreachable past `peer_unreachable_minutes` (15).
@@ -15,6 +15,7 @@
 - Schedules (`features.schedules`): automatic snapshot rotations per dataset and kept counts (driving `zfs-auto-snapshot`), weekly or monthly scrub per pool (OpenZFS timers), SMART short and long self-tests (systemd timers) with the last result per disk; alerts on a failed self-test or a scrub that found errors.
 - Native encryption (`features.encryption`): new encrypted datasets with a passphrase (stdin only, never stored) or a root-only key file, key status per dataset, unlock and lock from the page, unlock at boot for key-file datasets (`cairn-unlock.service`).
 - Off-site backups with restic (`features.offsite`): local, SFTP, S3 and B2 repositories (password and keys in root-only files, never returned), daily or weekly backup of a fresh snapshot per dataset with retention (`forget --prune`), last-run status and alerts, restore of a file or folder into a new folder.
+- *Update* runs in the background with a progress bar (download, then package being installed, from apt's status stream); a failure stays shown on the card.
 
 ## 0.1.0 (2026-11-05)
 

@@ -962,11 +962,14 @@ function renderJournal() {
   if (!M) return;
   const u = M.updates, n = u.packages.length, held = u.held || [];
   $("updates").hidden = false;
-  $("updates").innerHTML = '<div class="card-head"><b>' + t("System updates") + "</b>" + (n ? '<button class="primary" data-act="updates-apply">' + t("Update") + "</button>" : "") +
+  const job = M.upgrade || {};
+  if (job.running) pollUpgrade();
+  $("updates").innerHTML = '<div class="card-head"><b>' + t("System updates") + "</b>" + (n && !job.running ? '<button class="primary" data-act="updates-apply">' + t("Update") + "</button>" : "") +
     '</div><div class="svc"><span class="dot ' + (n || u.reboot ? "warn" : "ok") + '"></span><span>' +
     (n ? tp(n, "{n} package to update", "{n} packages to update") : t("System up to date")) + (u.reboot ? " · " + t("restart required") : "") + "</span></div>" +
     (n ? '<p class="sub">' + u.packages.map(esc).join(", ") + "</p>" : "") +
-    (held.length ? '<p class="sub">' + t("Held (apt-mark hold), not updated: {list}", { list: held.map(esc).join(", ") }) + "</p>" : "");
+    (held.length ? '<p class="sub">' + t("Held (apt-mark hold), not updated: {list}", { list: held.map(esc).join(", ") }) + "</p>" : "") +
+    '<div id="upgrade">' + upgradeHtml(job) + "</div>";
   el.innerHTML = '<div class="card-head"><b>' + t("Action log") + "</b></div>" +
     (M.journal.length ? '<div class="table-wrap"><table><tbody>' + M.journal.map(l => {
       const [when, ...rest] = l.split(" ");
@@ -974,11 +977,34 @@ function renderJournal() {
     }).join("") + "</tbody></table></div>" : '<p class="sub">' + t("No recent actions.") + "</p>");
 }
 
+// Progress of the "Update" job, polled every second while it runs (the slow loop is too slow for it).
+function upgradeHtml(j) {
+  if (j.running) {
+    const step = j.phase === "install" ? t("Installing {pkg}", { pkg: esc(j.pkg) }) : j.phase === "download" ? t("Downloading packages") : t("Preparing");
+    return '<div class="bar big"><i data-w="' + j.pct + '"></i></div><p class="sub">' + step + " · " + j.pct + " %</p>";
+  }
+  return j.ok === false ? '<div class="svc"><span class="dot bad"></span><span>' + t("Last update failed: {err}", { err: esc(j.error) }) + "</span></div>" : "";
+}
+let upgradeTimer = null;
+function pollUpgrade() {
+  if (upgradeTimer) return;
+  upgradeTimer = setInterval(async () => {
+    let j;
+    try { j = JSON.parse(await get("/api/updates")); } catch { return; }
+    const box = $("upgrade");
+    if (j.running) { if (box) { box.innerHTML = upgradeHtml(j); paint(box); } return; }
+    clearInterval(upgradeTimer);
+    upgradeTimer = null;
+    if (j.ok) toast(t("Updates installed"));
+    await slowTick();
+  }, 1000);
+}
+
 async function applyUpdates() {
   const p = M.updates.packages;
   const fd = await ask(t("Install the updates?"), "<p>" + tp(p.length, "{n} package: {list}", "{n} packages: {list}", { list: p.map(esc).join(", ") }) + "</p>" +
     '<p class="sub">' + t("apt-get upgrade, configuration files kept. The affected services restart (Samba: open connections are dropped). May take a few minutes.") + "</p>", t("Update"));
-  if (fd) return mg({ op: "updates_apply" }, t("Updates installed"));
+  if (fd) return mg({ op: "updates_apply" }, t("Update started"));
 }
 
 function renderAlerts() {

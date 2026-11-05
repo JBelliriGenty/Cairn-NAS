@@ -413,6 +413,7 @@ fn summary(cfg: &Config) -> Value {
 /// and itself translated) to French. Specific templates before generic ones.
 const FR: &[(&str, &str)] = &[
     ("Service {} failed", "Service {} en échec"),
+    ("an update is already running", "une mise à jour est déjà en cours"),
     ("Pool {} is {} full (threshold {}%)", "Pool {} rempli à {} (seuil {} %)"),
     ("Pool {}: {}", "Pool {} : {}"),
     ("Pool {}: {}", "Pool {} : {}"),
@@ -1098,6 +1099,7 @@ fn manage_view(cfg: &Config, lang: &str) -> Value {
         "sessions": smb_sessions(),
         "journal": journal(),
         "updates": updates(),
+        "upgrade": UPGRADE.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "repl_pubkey": if cfg.features.replication { read(&format!("{REPL_KEY}.pub")).trim().to_string() } else { String::new() },
         "bonjour": if std::path::Path::new("/usr/sbin/avahi-daemon").exists() { cmd(&["systemctl", "is-active", "avahi-daemon"]).trim().to_string() } else { "absent".into() },
     })
@@ -1144,6 +1146,58 @@ fn updates() -> Value {
     let v = json!({"packages": pkgs, "held": held, "reboot": std::path::Path::new("/run/reboot-required").exists()});
     *c = Some((Instant::now(), v.clone()));
     v
+}
+
+/// The running (or last) "Update" job: {running, phase, pct, pkg} then {running: false, ok, error}.
+static UPGRADE: Mutex<Value> = Mutex::new(Value::Null);
+
+/// apt in transient units: the service's ProtectSystem makes /usr read-only, so dpkg cannot
+/// write there from inside it. dpkg --configure -a finishes an interrupted run.
+fn upgrade() -> Result<(), String> {
+    let host = |argv: &[&str]| {
+        let mut a = vec!["systemd-run", "--wait", "--pipe", "--quiet", "--collect", "--setenv=DEBIAN_FRONTEND=noninteractive"];
+        a.extend_from_slice(argv);
+        a.into_iter().map(String::from).collect::<Vec<_>>()
+    };
+    let set = |v: Value| *UPGRADE.lock().unwrap_or_else(|e| e.into_inner()) = v;
+    let run_host = |argv: &[&str]| run(&host(argv).iter().map(String::as_str).collect::<Vec<_>>(), None);
+    run_host(&["apt-get", "update", "-q"])?;
+    set(json!({"running": true, "phase": "prepare", "pct": 5}));
+    run_host(&["dpkg", "--configure", "-a"])?;
+    let argv = host(&["apt-get", "-y", "-q", "-o", "APT::Status-Fd=1", "-o", "Dpkg::Options::=--force-confdef",
+        "-o", "Dpkg::Options::=--force-confold", "upgrade", "--with-new-pkgs"]);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("systemd-run: {e}"))?;
+    // ponytail: stderr read after stdout ends; apt writes little there (pipe buffer is 64 KiB).
+    for line in std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().ok_or("no stdout")?)).map_while(Result::ok) {
+        if let Some(v) = apt_status(&line) {
+            set(v);
+        }
+    }
+    let o = child.wait_with_output().map_err(|e| e.to_string())?;
+    if o.status.success() {
+        return Ok(());
+    }
+    Err(format!("apt-get : {}", String::from_utf8_lossy(&o.stderr).trim()))
+}
+
+/// One APT::Status-Fd line ("dlstatus:file:pct:msg", "pmstatus:pkg:pct:msg") as job progress:
+/// download is 5-40 % of the bar, install 40-100 %.
+fn apt_status(line: &str) -> Option<Value> {
+    let mut f = line.splitn(4, ':');
+    let (kind, what, pct) = (f.next()?, f.next()?, f.next()?.parse::<f64>().ok()?);
+    let (phase, base, span) = match kind {
+        "dlstatus" => ("download", 5.0, 35.0),
+        "pmstatus" => ("install", 40.0, 60.0),
+        _ => return None,
+    };
+    let pkg = if kind == "pmstatus" { what } else { "" };
+    Some(json!({"running": true, "phase": phase, "pct": (base + pct * span / 100.0).round() as u64, "pkg": pkg}))
 }
 
 /// From `apt list --upgradable` and `apt-mark showhold`: (to upgrade, held back).
@@ -1346,20 +1400,22 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             Ok(format!("op=group_delete name={name}"))
         }
         "updates_apply" => {
+            let mut job = UPGRADE.lock().unwrap_or_else(|e| e.into_inner());
+            if job["running"] == true {
+                return Err("an update is already running".into());
+            }
             // Held packages (apt-mark hold) stay as they are; existing config files are kept.
             let pkgs = updates()["packages"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")).unwrap_or_default();
-            // In a transient unit: the service's ProtectSystem makes /usr read-only, so dpkg
-            // cannot write there from inside it. dpkg --configure -a finishes an interrupted run.
-            let host = |argv: &[&str]| {
-                let mut a = vec!["systemd-run", "--wait", "--pipe", "--quiet", "--collect", "--setenv=DEBIAN_FRONTEND=noninteractive"];
-                a.extend_from_slice(argv);
-                run(&a, None)
-            };
-            host(&["apt-get", "update", "-q"])?;
-            let res = host(&["dpkg", "--configure", "-a"]).and_then(|()| host(&["apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confdef",
-                "-o", "Dpkg::Options::=--force-confold", "upgrade", "--with-new-pkgs"]));
-            *UPDATES.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            res?;
+            *job = json!({"running": true, "phase": "prepare", "pct": 0});
+            // In the background: the page follows it on /api/updates (apt can take minutes).
+            std::thread::spawn(|| {
+                let res = upgrade();
+                *UPDATES.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                if let Err(e) = &res {
+                    eprintln!("manage op=updates_apply failed: {e}");
+                }
+                *UPGRADE.lock().unwrap_or_else(|e| e.into_inner()) = json!({"running": false, "ok": res.is_ok(), "error": res.err()});
+            });
             Ok(format!("op=updates_apply packages={pkgs}"))
         }
         "alert_test" => {
@@ -2419,6 +2475,7 @@ fn handle(cfg: &Config, mut r: Request) {
         (Method::Get, "/api/slow") => respond(r, 200, slow(cfg), "text/plain"),
         (Method::Get, "/api/peers") if !cfg.peers.is_empty() => respond(r, 200, peers::view(cfg).to_string(), "application/json"),
         (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg, lang).to_string(), "application/json"),
+        (Method::Get, "/api/updates") => respond(r, 200, UPGRADE.lock().unwrap_or_else(|e| e.into_inner()).to_string(), "application/json"),
         // On demand only: zpool import reads the label of every disk.
         (Method::Get, "/api/importable") if cfg.features.pools => respond(r, 200, json!(parse_importable(&cmd(&["zpool", "import"]))).to_string(), "application/json"),
         (Method::Get, "/api/browse" | "/api/download") if cfg.features.restore => restore::serve(r, &path, lang),
@@ -2733,6 +2790,13 @@ mod tests {
         let list = "En train de lister…\nwazuh-agent/stable 4.14.9-1 amd64 [upgradable from: 4.14.8-1]\nopenssl/trixie-security 3.5.4-1 amd64 [upgradable from: 3.5.1-1]\n";
         let (up, held) = upgradable(list, "wazuh-agent\n");
         assert_eq!((up, held), (vec!["openssl".to_string()], vec!["wazuh-agent".to_string()]));
+    }
+
+    #[test]
+    fn apt_status_progress() {
+        assert_eq!(apt_status("pmstatus:openssl:50.0:Installing openssl (amd64)").unwrap(), json!({"running": true, "phase": "install", "pct": 70, "pkg": "openssl"}));
+        assert_eq!(apt_status("dlstatus:3:100:Retrieving file 3 of 8").unwrap()["pct"], 40);
+        assert!(apt_status("Setting up openssl (3.5.4-1) ...").is_none());
     }
 
     #[test]
