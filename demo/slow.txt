@@ -272,3 +272,8 @@ nvme-eui.00000000000000000c82d58552000296|nvme0n1
 {"capacity":4096805658624,"critical":null,"dev":"sdc","hours":11099,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"NA2T369V2NP667LV","spare":null,"spare_thr":null,"temp":25,"unsafe":null,"used":null,"written":null}
 {"capacity":4096805658624,"critical":null,"dev":"sdd","hours":11076,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"8MYIJURYNM53T6ZY","spare":null,"spare_thr":null,"temp":27,"unsafe":null,"used":null,"written":null}
 {"capacity":4096805658624,"critical":null,"dev":"sde","hours":11117,"media_errors":null,"model":"ORICO","passed":true,"realloc":0,"serial":"VPY9D8DWA2CLYRWS","spare":null,"spare_thr":null,"temp":26,"unsafe":null,"used":null,"written":null}
+@@
+tank/documents	1793689200	17102	93600
+tank/homes	1793689200	17102	93600
+tank/photos	1793602800	103502	93600
+tank/projects	-	-	93600

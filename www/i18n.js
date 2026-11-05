@@ -83,7 +83,8 @@ const DICT = {
     "No snapshots. Use the “Snapshot” button on a dataset to create one.": "Aucun snapshot. Bouton « Snapshot » sur un dataset pour en créer un.",
     "Unique size": "Taille propre", "Created": "Créé le", "{n} dataset": "{n} dataset", "{n} datasets": "{n} datasets",
     "Delete all {n}": "Supprimer les {n}", "{n} snapshot": "{n} snapshot", "{n} snapshots": "{n} snapshots",
-    "last {when}": "dernier {when}", "automatic rotation": "rotation automatique",
+    "last {when}": "dernier {when}", "Replication": "Réplication", "Last snapshot": "Dernier snapshot", "Age": "Âge", "State": "État",
+    "never": "jamais", "late (over {h} h)": "en retard (plus de {h} h)", "up to date": "à jour", "automatic rotation": "rotation automatique",
     "In": "Dans", "e.g. photos": "ex. photos", "Dataset {name} created": "Dataset {name} créé",
     "No free disk: every disk already has partitions or data, or belongs to a pool.": "Aucun disque libre : tous les disques ont déjà des partitions, des données ou appartiennent à un pool.",
     "Only blank disks are offered. <b>The chosen disks will be completely erased.</b>": "Seuls les disques vierges sont proposés. <b>Les disques choisis seront entièrement effacés.</b>",
@@ -178,7 +179,7 @@ const DICT = {
     "apt-get upgrade, configuration files kept. The affected services restart (Samba: open connections are dropped). May take a few minutes.": "apt-get upgrade, fichiers de configuration conservés. Les services concernés redémarrent (Samba : connexions en cours coupées). Peut prendre quelques minutes.",
     "Updates installed": "Mises à jour installées", "Alerts": "Alertes", "Send a test": "Envoyer un test",
     "Not configured: set <code>alerts.url</code> in the panel configuration.": "Non configurées : renseigner <code>alerts.url</code> dans la configuration du panneau.",
-    "Sent to {target}: degraded or faulted pool, pool {pct} % full, disk failing SMART or with errors, failed service. One message when it starts, another when it is back to normal.": "Envoyées à {target} : pool dégradé ou en erreur, pool rempli à {pct} %, disque en échec SMART ou avec erreurs, service en échec. Un message à l'apparition, un autre au retour à la normale.",
+    "Sent to {target}: degraded or faulted pool, pool {pct} % full, disk failing SMART or with errors, failed service, late replication. One message when it starts, another when it is back to normal.": "Envoyées à {target} : pool dégradé ou en erreur, pool rempli à {pct} %, disque en échec SMART ou avec erreurs, service en échec, réplication en retard. Un message à l'apparition, un autre au retour à la normale.",
     "No current problems": "Aucun problème en cours", "Test alert sent": "Alerte de test envoyée",
     "{name} restarted": "{name} redémarré",
     // sign-in

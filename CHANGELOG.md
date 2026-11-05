@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Replication status: newest snapshot of each replicated dataset in Storage, alert when it is too old (`replication` in the config).
+
 ## 0.1.0 (2026-11-05)
 
 First public release.

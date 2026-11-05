@@ -22,7 +22,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::collections::BTreeMap;
 use std::ffi::{c_char, CStr, CString};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 const INDEX: &str = include_str!("../www/index.html");
@@ -55,6 +55,7 @@ struct Config {
     recycle_days: u64,
     summary_token: Option<String>, // bearer token for /api/summary only
     lang: String, // alerts, /api/summary, and the page when the browser asks for no known language
+    replication: Vec<Replica>,
     public: Value,      // what /api/config returns (labels, title…)
 }
 
@@ -71,6 +72,14 @@ struct Alerts {
     headers_file: Option<String>, // curl -H @file, e.g. "Authorization: Bearer …" (secret, not in the config)
     capacity_pct: u64,
     interval_s: u64,
+}
+
+/// A replicated dataset (and its children): the newest snapshot whose name
+/// starts with `prefix` tells when it was last sent (source) or received (target).
+struct Replica {
+    dataset: String,
+    prefix: String,
+    max_age_s: u64,
 }
 
 fn strings(v: &Value, key: &str) -> Vec<String> {
@@ -130,6 +139,11 @@ impl Config {
             alerts_file: s("alerts_file", "/var/lib/cairn-nas/alerts.json"),
             recycle_days,
             lang: s("lang", "en"),
+            replication: v["replication"].as_array().into_iter().flatten().filter_map(|r| Some(Replica {
+                dataset: r["dataset"].as_str()?.to_string(),
+                prefix: r["snapshot_prefix"].as_str().unwrap_or("").to_string(),
+                max_age_s: r["max_age_hours"].as_u64().unwrap_or(26).max(1) * 3600,
+            })).collect(),
             // A file, so the secret stays out of the config; a short token is refused.
             summary_token: v["summary_token_file"].as_str().map(|f| {
                 let t = fs::read_to_string(f).expect("summary_token_file unreadable").trim().to_string();
@@ -216,13 +230,19 @@ fn slow(cfg: &Config) -> String {
     argv.extend(cfg.services.iter().map(String::as_str));
     let states = cmd(&argv);
     let services: String = cfg.services.iter().zip(states.lines()).map(|(s, st)| format!("{s} {st}\n")).collect();
+    let snaps = cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,used,creation"]);
+    let now = now_s();
+    let repl: String = last_sends(&snaps, &cfg.replication).iter().map(|(ds, last, max)| match last {
+        Some(t) => format!("{ds}\t{t}\t{}\t{max}\n", now.saturating_sub(*t)),
+        None => format!("{ds}\t-\t-\t{max}\n"),
+    }).collect();
     join(vec![
         read("/proc/sys/kernel/hostname") + &read("/proc/sys/kernel/osrelease"),
         // Every imported pool: a pool added later shows up without any config change.
         cmd(&["zpool", "get", "-Hp", "health,size,allocated,free,fragmentation,capacity"]),
         cmd(&["zpool", "status"]),
         cmd(&["zfs", "list", "-Hp", "-o", "name,used,avail,refer,compressratio,compression,recordsize,quota,mountpoint,com.sun:auto-snapshot"]),
-        cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,used,creation"]),
+        snaps,
         cmd(&["ss", "-Htn", "state", "established", "( sport = :2049 )"]),
         services,
         cmd(&["ip", "-j", "addr"]),
@@ -234,7 +254,49 @@ fn slow(cfg: &Config) -> String {
         read("/etc/exports").lines().filter(|l| !l.starts_with('#')).map(|l| format!("{l}\n")).collect(),
         by_id(),
         health(),
+        repl,
     ])
+}
+
+fn now_s() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// (dataset, newest matching snapshot's creation time, max age) for each
+/// replicated dataset and its children, from `zfs list -Hp -t snapshot`
+/// lines whose first column is the name and last one the creation time.
+/// ponytail: a child with no snapshot at all is not listed (only the root is,
+/// as never sent); list the datasets too if that matters.
+fn last_sends(snaps: &str, reps: &[Replica]) -> Vec<(String, Option<u64>, u64)> {
+    let mut out: BTreeMap<String, (Option<u64>, u64)> = BTreeMap::new();
+    for r in reps {
+        out.entry(r.dataset.clone()).or_insert((None, r.max_age_s));
+        for l in snaps.lines() {
+            let f: Vec<&str> = l.split('\t').collect();
+            let (Some((ds, snap)), Some(Ok(t))) = (f[0].split_once('@'), f.last().map(|t| t.trim().parse::<u64>())) else { continue };
+            let under = ds == r.dataset || ds.strip_prefix(&r.dataset).is_some_and(|x| x.starts_with('/'));
+            if under && snap.starts_with(&r.prefix) {
+                let e = out.entry(ds.to_string()).or_insert((None, r.max_age_s));
+                e.0 = e.0.max(Some(t));
+            }
+        }
+    }
+    out.into_iter().map(|(d, (t, m))| (d, t, m)).collect()
+}
+
+/// Replication late (newest snapshot older than its max age) or never done.
+fn replication_problems(rows: &[(String, Option<u64>, u64)], now: u64, out: &mut BTreeMap<String, String>) {
+    for (ds, last, max) in rows {
+        match last {
+            None => {
+                out.insert(format!("repl:{ds}"), format!("Replication of {ds}: no snapshot yet"));
+            }
+            Some(t) if now.saturating_sub(*t) > *max => {
+                out.insert(format!("repl:{ds}"), format!("Replication of {ds} is late: last snapshot {} h ago (threshold {} h)", (now - t) / 3600, max / 3600));
+            }
+            _ => {}
+        }
+    }
 }
 
 fn disks() -> Vec<String> {
@@ -326,6 +388,8 @@ const FR: &[(&str, &str)] = &[
     ("Pool {}: {}", "Pool {} : {}"),
     ("Disk {}: SMART self-test failed", "Disque {} : test SMART en échec"),
     ("Disk {}: {} = {}", "Disque {} : {} = {}"),
+    ("Replication of {} is late: last snapshot {} h ago (threshold {} h)", "Réplication de {} en retard : dernier snapshot il y a {} h (seuil {} h)"),
+    ("Replication of {}: no snapshot yet", "Réplication de {} : aucun snapshot pour l'instant"),
     ("NVMe critical warning", "avertissement critique NVMe"),
     ("media errors", "erreurs de lecture"),
     ("reallocated sectors", "secteurs réalloués"),
@@ -434,6 +498,10 @@ fn lang_of<'a>(cfg: &'a Config, r: &Request) -> &'a str {
 fn problems(cfg: &Config, capacity_pct: u64) -> BTreeMap<String, String> {
     let mut out = pool_problems(&cmd(&["zpool", "list", "-H", "-o", "name,health,capacity"]), &cmd(&["zpool", "status"]), capacity_pct);
     disk_problems(&mut out);
+    if !cfg.replication.is_empty() {
+        let rows = last_sends(&cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,creation"]), &cfg.replication);
+        replication_problems(&rows, now_s(), &mut out);
+    }
     let mut argv = vec!["systemctl", "is-active"];
     argv.extend(cfg.services.iter().map(String::as_str));
     // "failed" only: a service stopped on purpose (inactive) is not a problem.
@@ -1744,6 +1812,24 @@ mod tests {
         assert!(argv(json!({"action": "scrub_start"})).is_err());
         assert!(argv(json!({"action": "snapshot_create", "dataset": "fast/vm", "name": "m-1"})).is_ok());
         assert!(argv(json!({"action": "rm"})).is_err());
+    }
+
+    #[test]
+    fn replication_age() {
+        let snaps = "backup/tank@zfs-auto-snap_daily-1\t100\t1000\nbackup/tank@zfs-auto-snap_frequent-2\t5\t2000\n\
+            backup/tank/cloud@syncoid_x\t0\t1500\nbackup/tank/cloud@other\t0\t9000\nbackup/tankX@a\t0\t9999\nother@a\t0\t9999\n";
+        let reps = [Replica { dataset: "backup/tank".into(), prefix: String::new(), max_age_s: 3600 }];
+        assert_eq!(last_sends(snaps, &reps), [("backup/tank".to_string(), Some(2000), 3600), ("backup/tank/cloud".to_string(), Some(9000), 3600)]);
+        let reps = [Replica { dataset: "backup/tank".into(), prefix: "syncoid_".into(), max_age_s: 3600 },
+            Replica { dataset: "fast".into(), prefix: String::new(), max_age_s: 7200 }];
+        let rows = last_sends("backup/tank/cloud@syncoid_x\t1500\n", &reps); // name,creation only (alerts)
+        assert_eq!(rows, [("backup/tank".to_string(), None, 3600), ("backup/tank/cloud".to_string(), Some(1500), 3600), ("fast".to_string(), None, 7200)]);
+        let mut out = BTreeMap::new();
+        replication_problems(&rows[..2], 1500 + 3600, &mut out);
+        assert_eq!(out.len(), 1); // exactly at the limit: still fine
+        replication_problems(&rows[1..2], 1500 + 3600 * 5 + 1, &mut out);
+        assert_eq!(out["repl:backup/tank/cloud"], "Replication of backup/tank/cloud is late: last snapshot 5 h ago (threshold 1 h)");
+        assert_eq!(tr("fr", &out["repl:backup/tank"]), "Réplication de backup/tank : aucun snapshot pour l'instant");
     }
 
     #[test]

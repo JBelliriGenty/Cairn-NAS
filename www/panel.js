@@ -305,7 +305,7 @@ function slowTick() {
   const manage = f.nfs || f.smb || f.users || f.pools ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
-    const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health] = sections(out);
+    const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health, repl] = sections(out);
     const [host, kernel] = hk.trim().split("\n");
     const addrs = {};
     JSON.parse(ipj || "[]").forEach(i => {
@@ -328,6 +328,8 @@ function slowTick() {
       model: Object.fromEntries(models.trim().split("\n").filter(Boolean).map(l => l.split("|").map(s => s.trim()))),
       exports: exports.trim().split("\n").filter(l => l.trim()),
       byid: Object.fromEntries(byid.trim().split("\n").filter(Boolean).map(l => l.split("|"))),
+      // Replicated datasets: "dataset\tlast snapshot (s)\tage (s)\tmax age (s)", "-" when never.
+      replication: (repl || "").trim().split("\n").filter(Boolean).map(l => l.split("\t")),
       health: Object.fromEntries((health || "").trim().split("\n").filter(Boolean).map(l => { const h = JSON.parse(l); return [h.dev, h]; })),
     };
     readOk();
@@ -651,6 +653,16 @@ function renderStorage() {
           '</td><td class="actions"><button class="danger" data-act="snap-del-many" data-snap="' + esc(snap) + '">' + t("Delete all {n}", { n: list.length }) + "</button></td></tr>").join("") +
       Object.entries(auto).map(([label, a]) => '<tr class="auto"><td>zfs-auto-snap · ' + esc(label) + " — " + tp(a.n, "{n} snapshot", "{n} snapshots") + "</td><td>" + bytes(a.used) +
         "</td><td>" + t("last {when}", { when: when(a.last) }) + '</td><td class="sub">' + t("automatic rotation") + "</td></tr>").join("") + "</tbody>";
+
+  // Replication: the newest snapshot of each replicated dataset, late past its max age.
+  $("repl-title").hidden = $("repl-card").hidden = !S.replication.length;
+  $("repl").innerHTML = "<thead><tr>" + ["Dataset", "Last snapshot", "Age", "State"].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
+    S.replication.map(([ds, last, age, max]) => {
+      const never = last === "-", late = never || Number(age) > Number(max);
+      return "<tr><td>" + dot("ds:" + ds) + "<b>" + esc(UI.labels["ds:" + ds] || ds) + "</b></td><td>" + (never ? "—" : when(Number(last))) +
+        "</td><td>" + (never ? "—" : duration(Number(age))) + '</td><td><span class="pill ' + (late ? "bad" : "ok") + '">' +
+        (never ? t("never") : late ? t("late (over {h} h)", { h: Number(max) / 3600 }) : t("up to date")) + "</span></td></tr>";
+    }).join("") + "</tbody>";
 }
 
 /* NFS and services */
@@ -704,7 +716,7 @@ function renderAlerts() {
   if (!M) return;
   el.innerHTML = '<div class="card-head"><b>' + t("Alerts") + "</b>" + (a ? '<button data-act="alert-test">' + t("Send a test") + "</button>" : "") + "</div>" +
     (!a ? '<p class="sub">' + t("Not configured: set <code>alerts.url</code> in the panel configuration.") + "</p>"
-      : '<p class="sub">' + t("Sent to {target}: degraded or faulted pool, pool {pct} % full, disk failing SMART or with errors, failed service. One message when it starts, another when it is back to normal.",
+      : '<p class="sub">' + t("Sent to {target}: degraded or faulted pool, pool {pct} % full, disk failing SMART or with errors, failed service, late replication. One message when it starts, another when it is back to normal.",
         { target: esc(a.target), pct: a.capacity_pct }) + "</p>" +
         (a.problems.length ? a.problems.map(p => '<div class="svc"><span class="dot bad"></span><span>' + esc(p) + "</span></div>").join("")
           : '<div class="svc"><span class="dot ok"></span><span>' + t("No current problems") + "</span></div>"));

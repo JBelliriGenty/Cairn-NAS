@@ -97,6 +97,7 @@ with your own if you have one.
 | `features` | `{nfs, smb, users, pools}`: allowed writes |
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
+| `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in Storage with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |
 | `recycle_days` | how long the SMB recycle bin keeps files (30) |
 | `lang` | `en` or `fr`: alerts, `/api/summary`, and the page's default when the browser asks for neither (`en`) |
 | `nics`, `hosts` | display names of network interfaces and client machines |
@@ -112,7 +113,7 @@ with your own if you have one.
 ```
 
 `capacity` in %, `size`/`alloc` in bytes, `problems` = current alerts (pools,
-SMART disks, failed services). A signed-in session can read it; otherwise it
+SMART disks, failed services, late replication). A signed-in session can read it; otherwise it
 needs the `Authorization: Bearer <token>` header with the token from
 `summary_token_file` (`openssl rand -hex 32 > /etc/cairn-nas-summary-token`,
 `chmod 600`). [Homepage](https://gethomepage.dev) widget:
