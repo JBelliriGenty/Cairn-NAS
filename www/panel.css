@@ -392,3 +392,8 @@ a.btn:hover { border-color: var(--muted); }
 td.actions a.btn + button { margin-left: 6px; }
 .card > button + p.sub { margin-top: 8px; }
 .msgs { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
+.peer-ov { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.peer-ov:first-child { border-top: 0; padding-top: 0; }
+.peer-ov .card-head { margin-bottom: 0; }
+.peer-ov .verdict { font-size: 14px; margin: 10px 0 0; padding: 8px 12px; }
+.peer-ov .tiles { margin-top: 10px; }

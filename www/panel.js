@@ -449,14 +449,7 @@ function renderOverview() {
   // The other Cairn instances, apart from this machine's own tiles.
   const peers = (P || []).filter(m => !m.self);
   $("ov-machines-h").hidden = !peers.length;
-  $("ov-machines").innerHTML = peers.map(m => {
-    const s = m.summary;
-    return tile("machines", m.name, machineState(m), machineLvl(m),
-      (!m.ok && m.checked ? '<p class="sub">' + t("Unreachable for {d}", { d: duration(m.down_s) }) + "</p>" : "") +
-      (s ? Object.entries(s.pools).map(([n, p]) => '<div class="meter ' + (p.health !== "ONLINE" ? "bad" : p.capacity >= 80 ? "warn" : "ok") + '"><span>' + esc(n) + " · " + esc(p.health) +
-        '</span><div class="bar"><i data-w="' + p.capacity + '"></i></div><b>' + nf(p.capacity, 0) + " %</b></div>").join("") +
-        (s.temp_max_c != null ? '<p class="sub">' + t("Max temperature") + " " + nf(s.temp_max_c, 0) + " °C</p>" : "") : ""));
-  }).join("");
+  $("ov-machines").innerHTML = peers.map(peerOverview).join("");
   // Secondary facts: one line of links instead of half-empty tiles.
   $("facts").innerHTML = [
     ["partages", t("NFS: {exports} exports · {conn} / {clients} clients connected", { exports: S.exports.length, conn, clients: clients.size }), conn ? " ok" : ""],
@@ -794,6 +787,42 @@ function machineLvl(m) {
 function machineState(m) {
   if (!m.ok) return m.checked ? t("unreachable") : t("not checked yet");
   return m.summary.problems ? tp(m.summary.problems, "{n} problem", "{n} problems") : t("no problem");
+}
+// Another machine on Overview: its own tiles (from /api/summary?full=1), under its name.
+function peerOverview(m) {
+  const s = m.summary, f = s && s.full, lvl = machineLvl(m);
+  const meter = (label, pct, lvl) => '<div class="meter ' + lvl + '"><span>' + esc(label) + '</span><div class="bar"><i data-w="' + pct + '"></i></div><b>' + nf(pct, 0) + " %</b></div>";
+  const pools = s ? Object.entries(s.pools) : [];
+  const tiles = [];
+  if (f) {
+    const memPct = f.mem.total ? f.mem.used / f.mem.total * 100 : 0, temp = f.cpu_temp_c ?? s.temp_max_c;
+    tiles.push(tile("machines", t("System"), t("Processor") + " " + nf(f.cpu_pct, 0) + " %", f.cpu_pct > 85 ? "warn" : "",
+      meter(t("Memory"), memPct, memPct > 90 ? "warn" : "ok") + '<p class="sub">' + [t("load {v}", { v: (f.load || []).map(x => nf(x, 2)).join(" · ") }),
+        temp != null ? t("CPU temp.") + " " + nf(temp, 0) + " °C" : "", t("Up for {d}", { d: duration(f.uptime_s) })].filter(Boolean).join(" · ") + "</p>"));
+    const hs = (f.disks || []).map(healthOf);
+    tiles.push(tile("machines", t("Disk health"), t("{good} / {total} in good health", { good: hs.filter(h => h.lvl === "ok").length, total: hs.length }), worst(hs.map(h => h.lvl)),
+      '<div class="minidisks">' + f.disks.map((d, i) => '<span class="minidisk ' + hs[i].lvl + '" title="' + esc(t("{name}: {value}", { name: d.dev, value: hs[i].txt })) + '">' +
+        esc(d.dev) + (d.temp != null ? "<small>" + nf(d.temp, 0) + " °C</small>" : "") + "</span>").join("") + "</div>"));
+  }
+  if (pools.length) tiles.push(tile("machines", pools.length > 1 ? t("{n} ZFS pools", { n: pools.length }) : t("ZFS pool"),
+    t("{v} free", { v: bytes(pools.reduce((a, [, p]) => a + Math.max(0, p.size - p.alloc), 0)) }), pools.every(([, p]) => p.health === "ONLINE") ? "ok" : "bad",
+    pools.map(([n, p]) => meter(n + " · " + p.health, p.capacity, p.health !== "ONLINE" ? "bad" : p.capacity >= 80 ? "warn" : "ok")).join("")));
+  if (f) {
+    tiles.push(tile("machines", t("Network (all interfaces)"), "↓ " + bits(f.net.rx_bps) + " · ↑ " + bits(f.net.tx_bps), "", ""));
+    const svc = f.services || [], down = svc.filter(([, st]) => st !== "active");
+    if (svc.length) tiles.push(tile("machines", t("Services"), t("{up} / {total} active", { up: svc.length - down.length, total: svc.length }), down.length ? "warn" : "ok",
+      '<div class="svcdots">' + svc.map(([n, st]) => '<span class="dot ' + (st === "active" ? "ok" : "bad") + '" title="' + esc(t("{name}: {value}", { name: n, value: st })) + '"></span>').join("") + "</div>" +
+      (down.length ? '<p class="sub">' + t("Stopped: {list}", { list: down.map(([n]) => esc(n)).join(", ") }) + "</p>" : "")));
+    const rep = f.replication || [], late = rep.filter(([, age, max]) => age == null || age > max);
+    if (rep.length) tiles.push(tile("machines", t("Replication"), t("{ok} / {total} up to date", { ok: rep.length - late.length, total: rep.length }), late.length ? "bad" : "ok",
+      '<p class="sub">' + (late.length ? t("Late: {list}", { list: late.map(([ds]) => esc(ds)).join(", ") })
+        : t("Oldest last snapshot: {age}", { age: duration(Math.max(0, ...rep.map(r => r[1]))) })) + "</p>"));
+  } else if (s && s.temp_max_c != null) tiles.push(tile("machines", t("Max temperature"), nf(s.temp_max_c, 0) + " °C", lvlTemp(s.temp_max_c), ""));
+  const msgs = s && s.messages.length ? '<p class="verdict ' + lvl + '"><span class="dot ' + lvl + '"></span>' + esc(s.messages.join(" · ")) + "</p>" : "";
+  return '<div class="peer-ov"><div class="card-head"><span class="row"><span class="dot ' + lvl + '"></span><b>' + esc(m.name) + '</b><span class="sub">' + esc(machineState(m)) + "</span></span>" +
+    '<a class="btn" href="' + esc(m.link) + '" target="_blank" rel="noopener noreferrer">' + t("Open") + "</a></div>" +
+    (!m.ok ? '<p class="sub">' + (m.checked ? t("Unreachable for {d}", { d: duration(m.down_s) }) + (s ? " · " + t("Last known state:") : "") : t("Not checked yet.")) + "</p>" : "") +
+    msgs + '<div class="grid tiles">' + tiles.join("") + "</div></div>";
 }
 function renderMachines() {
   document.querySelector('#nav [data-view="machines"]').hidden = !FEAT().peers;

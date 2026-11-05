@@ -261,7 +261,10 @@ without a new snapshot. *Stop* and *Revoke* never delete data.
 One Cairn can show the others at a glance, read-only. List them under
 `peers`; a **Machines** view appears (and an Overview tile): one card per
 machine, this one first, with its pools (health, % used), problem count and
-messages, highest temperature, and an *Open* link to its own page.
+messages, highest temperature, and an *Open* link to its own page. Overview
+shows, under "Connected machines", each peer's own overview tiles (system,
+disk health, pools, network, services, replication): they come from
+`GET /api/summary?full=1`, which adds a `full` object to the summary.
 
 ```json
 "peers": [{"name": "Backup", "url": "http://192.0.2.20:9091", "link": "https://backup.example.lan",

@@ -407,6 +407,15 @@ fn summary(cfg: &Config) -> Value {
     summary_json(&cmd(&["zpool", "list", "-H", "-p", "-o", "name,health,capacity,size,alloc"]), &p, &hwmon())
 }
 
+/// `?full=1` adds what another Cairn shows on its Overview (peers::full).
+fn summary_for(cfg: &Config, r: &Request) -> Value {
+    let mut s = summary(cfg);
+    if r.url().split_once('?').is_some_and(|(_, q)| q.split('&').any(|x| x == "full=1")) {
+        s["full"] = peers::full(cfg);
+    }
+    s
+}
+
 /* ---------- translations ---------- */
 
 /// Messages are written in English; FR maps each one (`{}` = any text, kept
@@ -2433,7 +2442,8 @@ fn handle(cfg: &Config, mut r: Request) {
     }
     if let (Some(t), Method::Get, "/api/summary") = (&cfg.summary_token, r.method(), path.as_str()) {
         if header(&r, "Authorization").strip_prefix("Bearer ").is_some_and(|b| ct_eq(b, t)) {
-            return respond(r, 200, summary(cfg).to_string(), "application/json");
+            let body = summary_for(cfg, &r).to_string();
+            return respond(r, 200, body, "application/json");
         }
     }
     if let Some(l) = &cfg.login {
@@ -2471,7 +2481,10 @@ fn handle(cfg: &Config, mut r: Request) {
             respond(r, 200, c.to_string(), "application/json")
         }
         (Method::Get, "/api/fast") => respond(r, 200, fast(), "text/plain"),
-        (Method::Get, "/api/summary") => respond(r, 200, summary(cfg).to_string(), "application/json"),
+        (Method::Get, "/api/summary") => {
+            let body = summary_for(cfg, &r).to_string();
+            respond(r, 200, body, "application/json")
+        }
         (Method::Get, "/api/slow") => respond(r, 200, slow(cfg), "text/plain"),
         (Method::Get, "/api/peers") if !cfg.peers.is_empty() => respond(r, 200, peers::view(cfg).to_string(), "application/json"),
         (Method::Get, "/api/manage") => respond(r, 200, manage_view(cfg, lang).to_string(), "application/json"),

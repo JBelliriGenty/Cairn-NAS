@@ -66,7 +66,75 @@ fn parse_summary(body: &str) -> Result<Value, String> {
             "capacity": p["capacity"].as_u64().unwrap_or(0), "size": p["size"].as_u64().unwrap_or(0), "alloc": p["alloc"].as_u64().unwrap_or(0)});
     }
     let messages: Vec<String> = v["messages"].as_array().into_iter().flatten().filter_map(|m| m.as_str()).take(50).map(|m| m.chars().take(300).collect()).collect();
-    Ok(json!({"pools": out, "problems": problems, "messages": messages, "temp_max_c": v["temp_max_c"].as_i64()}))
+    let mut res = json!({"pools": out, "problems": problems, "messages": messages, "temp_max_c": v["temp_max_c"].as_i64()});
+    if v["full"].is_object() {
+        res["full"] = clean(&v["full"], 0);
+    }
+    Ok(res)
+}
+
+/// A peer's free-form part (`full`) bounded: scalars, short strings, small
+/// arrays and objects, shallow. The page escapes whatever it shows.
+fn clean(v: &Value, depth: usize) -> Value {
+    match v {
+        Value::String(s) => json!(s.chars().take(200).collect::<String>()),
+        Value::Array(a) if depth < 4 => a.iter().take(64).map(|x| clean(x, depth + 1)).collect(),
+        Value::Object(o) if depth < 4 => Value::Object(o.iter().take(64).map(|(k, x)| (k.chars().take(64).collect(), clean(x, depth + 1))).collect()),
+        Value::Array(_) | Value::Object(_) => Value::Null,
+        _ => v.clone(),
+    }
+}
+
+/// /proc/stat "cpu" line: (total, idle+iowait).
+fn cpu_times(stat: &str) -> (u64, u64) {
+    let f: Vec<u64> = stat.lines().next().unwrap_or("").split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+    (f.iter().take(8).sum(), f.get(3).unwrap_or(&0) + f.get(4).unwrap_or(&0))
+}
+
+/// Sum of received and sent bytes of the listed interfaces in /proc/net/dev
+/// (all wired ones, e*, when the list is empty).
+fn net_bytes(dev: &str, nics: &[String]) -> (u64, u64) {
+    dev.lines().filter_map(|l| l.split_once(':')).filter(|(n, _)| {
+        let n = n.trim();
+        if nics.is_empty() { n.starts_with('e') } else { nics.iter().any(|x| x == n) }
+    }).fold((0, 0), |(rx, tx), (_, rest)| {
+        let f: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        (rx + f.first().unwrap_or(&0), tx + f.get(8).unwrap_or(&0))
+    })
+}
+
+/// What the Overview shows of this machine, for the other Cairn instances
+/// (`/api/summary?full=1`): CPU and network over half a second.
+pub(crate) fn full(cfg: &Config) -> Value {
+    let nics: Vec<String> = cfg.public["nics"].as_array().into_iter().flatten().filter_map(|n| n[0].as_str().map(String::from)).collect();
+    let (c0, n0) = (cpu_times(&read("/proc/stat")), net_bytes(&read("/proc/net/dev"), &nics));
+    std::thread::sleep(Duration::from_millis(500));
+    let (c1, n1) = (cpu_times(&read("/proc/stat")), net_bytes(&read("/proc/net/dev"), &nics));
+    let busy = if c1.0 > c0.0 { 100.0 * (1.0 - (c1.1 - c0.1) as f64 / (c1.0 - c0.0) as f64) } else { 0.0 };
+    let meminfo = read("/proc/meminfo");
+    let mem_of = |k: &str| meminfo.lines().find_map(|l| l.strip_prefix(k)?.strip_prefix(':')?.split_whitespace().next()?.parse::<u64>().ok()).unwrap_or(0) * 1024;
+    let cpu_temp = hwmon().lines().filter_map(|l| {
+        let f: Vec<&str> = l.split('|').collect();
+        (["coretemp", "k10temp"].contains(&f[0])).then(|| f[3].parse::<i64>().ok().map(|t| t / 1000)).flatten()
+    }).max();
+    let loadavg = read("/proc/loadavg");
+    let load: Vec<f64> = loadavg.split_whitespace().take(3).filter_map(|x| x.parse().ok()).collect();
+    let uptime = read("/proc/uptime").split_whitespace().next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0) as u64;
+    let disks: Vec<Value> = health().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).map(|d| json!({
+        "dev": d["dev"], "model": d["model"], "temp": d["temp"], "passed": d["passed"], "critical": d["critical"], "media_errors": d["media_errors"],
+        "spare": d["spare"], "spare_thr": d["spare_thr"], "used": d["used"], "realloc": d["realloc"], "selftest": {"passed": d["selftest"]["passed"]},
+    })).collect();
+    let mut argv = vec!["systemctl", "is-active"];
+    argv.extend(cfg.services.iter().map(String::as_str));
+    let services: Vec<Value> = cfg.services.iter().zip(cmd(&argv).lines()).map(|(s, st)| json!([s, st])).collect();
+    let now = now_s();
+    let repl: Vec<Value> = last_sends(&cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,creation"]), &replicas(cfg)).into_iter()
+        .map(|(ds, last, max)| json!([ds, last.map(|t| now.saturating_sub(t)), max])).collect();
+    json!({"cpu_pct": busy, "cores": read("/proc/stat").lines().filter(|l| l.starts_with("cpu") && !l.starts_with("cpu ")).count(),
+        "load": load, "uptime_s": uptime, "cpu_temp_c": cpu_temp,
+        "mem": {"total": mem_of("MemTotal"), "used": mem_of("MemTotal").saturating_sub(mem_of("MemAvailable"))},
+        "net": {"rx_bps": (n1.0.saturating_sub(n0.0)) * 16, "tx_bps": (n1.1.saturating_sub(n0.1)) * 16},
+        "disks": disks, "services": services, "replication": repl})
 }
 
 /// Records one poll result.
@@ -100,7 +168,7 @@ pub(crate) fn problems(cfg: &Config, out: &mut BTreeMap<String, String>) {
 fn fetch(p: &Peer) -> Result<Value, String> {
     use std::io::Write;
     use std::process::Stdio;
-    let url = format!("{}/api/summary", p.url);
+    let url = format!("{}/api/summary?full=1", p.url);
     let mut child = Command::new("curl")
         .args(["-fsS", "-m", "8", "--max-filesize", "262144", "--proto", "=http,https", "-K", "-", &url])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
@@ -179,6 +247,21 @@ mod tests {
         assert!(st.summary.is_some() && st.down_since == Some(2030));
         record(st, Ok(json!({"problems": 0})), 2060);
         assert!(st.ok && st.down_since.is_none() && st.error.is_empty());
+        let full = parse_summary(r#"{"pools":{},"problems":0,"full":{"cpu_pct":3.5,"services":[["nfs-server","active"]],"deep":{"a":{"b":{"c":{"d":1}}}},"s":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}"#).unwrap();
+        assert_eq!(full["full"]["services"], json!([["nfs-server", "active"]]));
+        assert_eq!(full["full"]["deep"], json!({"a": {"b": {"c": null}}}));
+        assert_eq!(full["full"]["s"].as_str().unwrap().len(), 200);
+        assert_eq!(cpu_times("cpu  10 0 10 70 10 0 0 0 0 0
+cpu0 1 2
+"), (100, 80));
+        let dev = "Inter-|
+ face |
+    lo: 9 0 0 0 0 0 0 0 9 0
+ enp1s0: 100 0 0 0 0 0 0 0 50 0
+ wlan0: 7 0 0 0 0 0 0 0 7 0
+";
+        assert_eq!(net_bytes(dev, &[]), (100, 50));
+        assert_eq!(net_bytes(dev, &["wlan0".into()]), (7, 7));
         for (en, fr) in FR {
             assert_eq!(en.matches("{}").count(), fr.matches("{}").count(), "{en}");
         }
