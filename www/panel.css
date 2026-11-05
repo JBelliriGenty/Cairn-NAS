@@ -44,7 +44,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 
 /* layout */
 .app { display: grid; grid-template-columns: 228px 1fr; min-height: 100vh; }
@@ -219,6 +219,9 @@ h3 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
 .dot.warn { background: var(--warn); }
 .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent); }
 
+/* a public key to select and copy in one click */
+.key { display: block; padding: 8px 10px; border-radius: 8px; background: var(--track); font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+
 /* pills, chips */
 .pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; background: var(--track); white-space: nowrap; }
@@ -323,7 +326,7 @@ dialog.is-open::backdrop { opacity: 1; transition-duration: var(--modal-open-dur
   .t-modal { transition: none !important; }
 }
 dialog label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-dialog input:not([type=radio]):not([type=checkbox]), dialog select { padding: 6px 10px; border: 1px solid var(--control); border-radius: 6px; background: var(--panel); }
+dialog input:not([type=radio]):not([type=checkbox]), dialog select, dialog textarea { padding: 6px 10px; border: 1px solid var(--control); border-radius: 6px; background: var(--panel); }
 dialog label.check { flex-direction: row; align-items: center; gap: 8px; }
 menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 16px 0 0; }
 fieldset.swatches { border: 1px solid var(--line); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px; margin: 0 0 12px; }

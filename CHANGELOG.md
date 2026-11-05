@@ -12,5 +12,6 @@ First public release.
 - English and French interface.
 - Disk replacement (`features.disks`): take a pool member offline, bring it back online, or replace it with a blank disk from the Disks view; refused while a resilver runs or when it would leave the vdev without redundancy. Resilver and scrub progress with time left.
 - Replication status: newest snapshot of each replicated dataset in a Backup view and an Overview tile, alert when it is too old (`replication` in the config).
+- Replication set up from the page (`features.replication`): the backup machine pulls the source's datasets every night with syncoid, through a source account that may only `zfs send`; longer snapshot retention on the backup side.
 - `cairn-nas --demo`: the page on sample data, nothing written.
 - Prebuilt binary for x86_64 Linux (Debian 13) in the releases.

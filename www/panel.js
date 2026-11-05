@@ -302,7 +302,7 @@ function fastTick() {
 
 function slowTick() {
   const f = FEAT();
-  const manage = f.nfs || f.smb || f.users || f.pools || f.disks ? get("/api/manage") : Promise.resolve("");
+  const manage = f.nfs || f.smb || f.users || f.pools || f.disks || f.replication ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
     const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health, repl] = sections(out);
@@ -682,10 +682,12 @@ function renderStorage() {
 
 // Replication: the newest snapshot of each replicated dataset, late past its max age.
 function renderBackup() {
-  document.querySelector('#nav [data-view="sauvegarde"]').hidden = !S.replication.length;
+  const on = FEAT().replication;
+  document.querySelector('#nav [data-view="sauvegarde"]').hidden = !S.replication.length && !on;
+  $("repl-setup").innerHTML = on && M ? replSetup() : "";
   const when = t => new Date(t * 1000).toLocaleString(LOCALE());
   $("repl").innerHTML = !S.replication.length
-    ? '<tbody><tr><td class="sub">' + t("No replication configured: list the replicated datasets under <code>replication</code> in the panel configuration.") + "</td></tr></tbody>"
+    ? '<tbody><tr><td class="sub">' + (on ? t("Nothing replicated yet.") : t("No replication configured: list the replicated datasets under <code>replication</code> in the panel configuration.")) + "</td></tr></tbody>"
     : "<thead><tr>" + ["Dataset", "Last snapshot", "Age", "State"].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
     S.replication.map(([ds, last, age, max]) => {
       const never = last === "-", late = never || Number(age) > Number(max);
@@ -693,6 +695,48 @@ function renderBackup() {
         "</td><td>" + (never ? "—" : duration(Number(age))) + '</td><td><span class="pill ' + (late ? "bad" : "ok") + '">' +
         (never ? t("never") : late ? t("late (over {h} h)", { h: Number(max) / 3600 }) : t("up to date")) + "</span></td></tr>";
     }).join("") + "</tbody>";
+}
+
+// Both halves of a pull replication: this machine copies others, others copy this one.
+function replSetup() {
+  const pulls = Object.entries(M.state.repl_pull || {}), allowed = Object.entries(M.state.repl_allow || {});
+  const btn = (act, name, label, cls) => '<button' + (cls ? ' class="' + cls + '"' : "") + ' data-act="' + act + '" data-name="' + esc(name) + '">' + label + "</button>";
+  return '<article class="card"><div class="card-head"><b>' + t("Copies kept on this machine") + "</b>" +
+    (pulls.length ? btn("repl-run", "", t("Run now")) : "") + '<button' + (M.repl_pubkey ? ' class="primary"' : "") + ' data-act="repl-pull-new">' + t("New replication") + "</button></div>" +
+    (M.repl_pubkey
+      ? '<p class="sub">' + t("This machine's key, to paste on the source machine (Backup view, “Allow a backup machine”):") + '</p><code class="key">' + esc(M.repl_pubkey) + "</code>"
+      : '<p class="sub">' + t("This machine first needs its own key to connect to the source machines.") + "</p>" + btn("repl-key", "", t("Create this machine's key"), "primary")) +
+    (pulls.length ? pulls.map(([target, j]) => '<div class="svc"><b>' + esc(target) + '</b><span class="sub">← ' + esc(j.host) + ":" + esc(j.source) + "</span>" +
+      btn("repl-pull-del", target, t("Stop"), "danger") + "</div>").join("")
+      : '<p class="sub">' + t("No replication. Every night at 03:00 this machine copies the datasets of another Cairn machine (syncoid), and keeps their automatic snapshots longer.") + "</p>") +
+    "</article>" +
+    '<article class="card"><div class="card-head"><b>' + t("Backup machines allowed to copy this one") + '</b><button data-act="repl-allow-new">' + t("Allow a backup machine") + "</button></div>" +
+    (allowed.length ? allowed.map(([host, e]) => '<div class="svc"><b>' + esc(host) + '</b><span class="sub">' + esc((e.datasets || []).join(", ")) + "</span>" +
+      btn("repl-revoke", host, t("Revoke"), "danger") + "</div>").join("")
+      : '<p class="sub">' + t("None. An allowed machine can only read (zfs send) the chosen datasets, from its own address, with its own key: it can neither change nor delete anything here.") + "</p>") +
+    "</article>";
+}
+async function replPullForm() {
+  const fd = await ask(t("New replication"),
+    "<label>" + t("Source machine") + '<input name="host" required placeholder="' + t("e.g. 192.168.1.10") + '" autocomplete="off"></label>' +
+    "<label>" + t("Dataset to copy (with its children)") + '<input name="source" required placeholder="tank"></label>' +
+    "<label>" + t("Copy into (local dataset, created by the first copy)") + '<input name="target" required placeholder="' + esc((Object.keys(S.pools)[0] || "backup") + "/tank") + '"></label>' +
+    '<p class="sub">' + t("Allow this machine on the source first (its Backup view, with the key shown here). The source's automatic snapshots are what is copied: turn them on there. The first copy starts right away.") + "</p>",
+    t("Create"));
+  if (fd) mg({ op: "repl_pull_save", host: fd.get("host").trim(), source: fd.get("source").trim(), target: fd.get("target").trim() }, t("Replication into {name} created", { name: fd.get("target") }));
+}
+async function replAllowForm() {
+  const pools = Object.keys(S.pools);
+  const fd = await ask(t("Allow a backup machine"),
+    "<label>" + t("Backup machine address") + '<input name="host" required placeholder="' + t("e.g. 192.168.1.20") + '" autocomplete="off"></label>' +
+    "<label>" + t("Its public key (shown in its Backup view)") + '<textarea name="key" required rows="3" placeholder="ssh-ed25519 AAAA…"></textarea></label>' +
+    '<fieldset class="rows"><legend>' + t("Datasets it may copy") + "</legend>" + pools.map(p => '<label class="check"><input type="checkbox" name="ds" value="' + esc(p) + '" checked> ' + esc(p) + "</label>").join("") + "</fieldset>",
+    t("Allow"));
+  if (fd) mg({ op: "repl_allow", host: fd.get("host").trim(), key: fd.get("key"), datasets: fd.getAll("ds") }, t("{name} allowed", { name: fd.get("host") }));
+}
+async function replConfirm(op, name, title, text, okMsg) {
+  const fd = await ask(title, "<p>" + text + "</p>", t("Confirm"), true);
+  if (fd) mg(op === "repl_revoke" ? { op, host: name } : { op, name }, okMsg);
 }
 
 /* NFS and services */
@@ -1087,6 +1131,14 @@ document.addEventListener("click", e => {
     case "alert-test": return mg({ op: "alert_test" }, t("Test alert sent"));
     case "updates-apply": return applyUpdates();
     case "user-new": return userForm();
+    case "repl-key": return mg({ op: "repl_key" }, t("Key created"));
+    case "repl-run": return mg({ op: "repl_run" }, t("Replication started"));
+    case "repl-pull-new": return replPullForm();
+    case "repl-allow-new": return replAllowForm();
+    case "repl-pull-del": return replConfirm("repl_pull_delete", d.name, t("Stop the replication into {name}?", { name: d.name }),
+      t("The nightly copy stops. What was already copied stays in <b>{name}</b>.", { name: esc(d.name) }), t("Replication into {name} stopped", { name: d.name }));
+    case "repl-revoke": return replConfirm("repl_revoke", d.name, t("Revoke {name}?", { name: d.name }),
+      t("<b>{name}</b> will no longer be able to copy this machine. Its copies stay on it.", { name: esc(d.name) }), t("{name} revoked", { name: d.name }));
     case "user-pass": return passwordForm(d.name);
     case "user-groups": return userGroupsForm(d.name);
     case "user-del": return deleteAccount("user_delete", d.name);

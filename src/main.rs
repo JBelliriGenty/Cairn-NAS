@@ -56,6 +56,7 @@ struct Config {
     summary_token: Option<String>, // bearer token for /api/summary only
     lang: String, // alerts, /api/summary, and the page when the browser asks for no known language
     replication: Vec<Replica>,
+    path: String, // this config file, for the cairn-repl service
     public: Value,      // what /api/config returns (labels, title…)
 }
 
@@ -76,6 +77,7 @@ struct Alerts {
 
 /// A replicated dataset (and its children): the newest snapshot whose name
 /// starts with `prefix` tells when it was last sent (source) or received (target).
+#[derive(Clone)]
 struct Replica {
     dataset: String,
     prefix: String,
@@ -97,7 +99,7 @@ impl Config {
         let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
         public["recycle_days"] = json!(recycle_days); // the effective value, even when unset
         let f = |k: &str| v["features"][k].as_bool().unwrap_or(false);
-        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), disks: f("disks") };
+        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), disks: f("disks"), replication: f("replication") };
         let firewall_table = v["firewall_table"].as_str().map(String::from);
         let l = &v["login"];
         let login = l.is_object().then(|| Login {
@@ -117,7 +119,7 @@ impl Config {
             capacity_pct: a["capacity_pct"].as_u64().unwrap_or(85),
             interval_s: a["interval_s"].as_u64().unwrap_or(300).max(60),
         });
-        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "disks": features.disks,
+        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "disks": features.disks, "replication": features.replication,
             "firewall": firewall_table.is_some(), "login": login.is_some(), "autosnap": std::path::Path::new("/usr/sbin/zfs-auto-snapshot").exists()});
         Config {
             listen: s("listen", "127.0.0.1:9091"),
@@ -150,6 +152,7 @@ impl Config {
                 assert!(t.len() >= 32, "summary_token_file: token shorter than 32 characters");
                 t
             }),
+            path: path.to_string(),
             public,
         }
     }
@@ -232,7 +235,7 @@ fn slow(cfg: &Config) -> String {
     let services: String = cfg.services.iter().zip(states.lines()).map(|(s, st)| format!("{s} {st}\n")).collect();
     let snaps = cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,used,creation"]);
     let now = now_s();
-    let repl: String = last_sends(&snaps, &cfg.replication).iter().map(|(ds, last, max)| match last {
+    let repl: String = last_sends(&snaps, &replicas(cfg)).iter().map(|(ds, last, max)| match last {
         Some(t) => format!("{ds}\t{t}\t{}\t{max}\n", now.saturating_sub(*t)),
         None => format!("{ds}\t-\t-\t{max}\n"),
     }).collect();
@@ -256,6 +259,17 @@ fn slow(cfg: &Config) -> String {
         health(),
         repl,
     ])
+}
+
+/// Replicated datasets watched: the config's, plus the pulls set up from the page.
+fn replicas(cfg: &Config) -> Vec<Replica> {
+    let mut out = cfg.replication.clone();
+    for target in load_manage(cfg)["repl_pull"].as_object().into_iter().flatten().map(|(t, _)| t) {
+        if !out.iter().any(|r| &r.dataset == target) {
+            out.push(Replica { dataset: target.clone(), prefix: String::new(), max_age_s: REPL_MAX_AGE_S });
+        }
+    }
+    out
 }
 
 fn now_s() -> u64 {
@@ -389,6 +403,16 @@ const FR: &[(&str, &str)] = &[
     ("Disk {}: SMART self-test failed", "Disque {} : test SMART en échec"),
     ("Disk {}: {} = {}", "Disque {} : {} = {}"),
     ("Replication of {} is late: last snapshot {} h ago (threshold {} h)", "Réplication de {} en retard : dernier snapshot il y a {} h (seuil {} h)"),
+    ("public key refused: one ssh-ed25519 line", "clé publique refusée : une ligne ssh-ed25519"),
+    ("backup machine: an IPv4 address", "machine de sauvegarde : une adresse IPv4"),
+    ("datasets refused", "datasets refusés"),
+    ("unknown machine", "machine inconnue"),
+    ("source machine: an IPv4 address or a host name", "machine source : une adresse IPv4 ou un nom d'hôte"),
+    ("source dataset refused", "dataset source refusé"),
+    ("local dataset refused: inside an existing dataset of a pool, e.g. backup/tank", "dataset local refusé : dans un dataset existant d'un pool, par ex. backup/tank"),
+    ("create this machine's key first", "créez d'abord la clé de cette machine"),
+    ("syncoid is not installed (apt install sanoid)", "syncoid n'est pas installé (apt install sanoid)"),
+    ("unknown replication", "réplication inconnue"),
     ("Replication of {}: no snapshot yet", "Réplication de {} : aucun snapshot pour l'instant"),
     ("NVMe critical warning", "avertissement critique NVMe"),
     ("media errors", "erreurs de lecture"),
@@ -505,8 +529,9 @@ fn lang_of<'a>(cfg: &'a Config, r: &Request) -> &'a str {
 fn problems(cfg: &Config, capacity_pct: u64) -> BTreeMap<String, String> {
     let mut out = pool_problems(&cmd(&["zpool", "list", "-H", "-o", "name,health,capacity"]), &cmd(&["zpool", "status"]), capacity_pct);
     disk_problems(&mut out);
-    if !cfg.replication.is_empty() {
-        let rows = last_sends(&cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,creation"]), &cfg.replication);
+    let reps = replicas(cfg);
+    if !reps.is_empty() {
+        let rows = last_sends(&cmd(&["zfs", "list", "-Hp", "-t", "snapshot", "-o", "name,creation"]), &reps);
         replication_problems(&rows, now_s(), &mut out);
     }
     let mut argv = vec!["systemctl", "is-active"];
@@ -656,6 +681,7 @@ struct Features {
     users: bool,
     pools: bool,
     disks: bool, // take pool members offline/online, replace them
+    replication: bool, // let a backup machine pull this one, pull others (syncoid)
 }
 
 static MANAGE: Mutex<()> = Mutex::new(());
@@ -1006,6 +1032,7 @@ fn manage_view(cfg: &Config, lang: &str) -> Value {
         "sessions": smb_sessions(),
         "journal": journal(),
         "updates": updates(),
+        "repl_pubkey": if cfg.features.replication { read(&format!("{REPL_KEY}.pub")).trim().to_string() } else { String::new() },
         "bonjour": if std::path::Path::new("/usr/sbin/avahi-daemon").exists() { cmd(&["systemctl", "is-active", "avahi-daemon"]).trim().to_string() } else { "absent".into() },
     })
 }
@@ -1368,6 +1395,87 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
             Ok(format!("op={op} pool={pool} device={} new={}", s("device"), s("new")))
         }
+        "repl_allow" | "repl_revoke" => {
+            need(f.replication)?;
+            let host = s("host");
+            if op == "repl_revoke" {
+                let Some(old) = state["repl_allow"].as_object_mut().and_then(|m| m.remove(&host)) else { return Err("unknown machine".into()) };
+                let still: Vec<String> = state["repl_allow"].as_object().into_iter().flatten().flat_map(|(_, e)| strings(e, "datasets")).collect();
+                for ds in strings(&old, "datasets").iter().filter(|d| !still.contains(d)) {
+                    run(&["zfs", "unallow", "-u", REPL_USER, "send,hold", ds], None)?;
+                }
+                write_repl_keys(&state)?;
+                save_manage(cfg, &state)?;
+                return Ok(format!("op=repl_revoke host={host}"));
+            }
+            let key = ssh_key(&s("key")).ok_or("public key refused: one ssh-ed25519 line")?;
+            let datasets = strings(a, "datasets");
+            let pl = pools();
+            if host.parse::<std::net::Ipv4Addr>().is_err() {
+                return Err("backup machine: an IPv4 address".into());
+            }
+            if datasets.is_empty() || datasets.len() > 32 || !datasets.iter().all(|d| is_dataset(&pl, d)) {
+                return Err("datasets refused".into());
+            }
+            if !pw.iter().any(|p| p.0 == REPL_USER) {
+                run(&["useradd", "-r", "-m", "-d", REPL_HOME, "-s", "/bin/sh", "-c", MARK, REPL_USER], None)?;
+            }
+            for ds in &datasets {
+                run(&["zfs", "allow", "-u", REPL_USER, "send,hold", ds], None)?;
+            }
+            state["repl_allow"][host.as_str()] = json!({"key": key, "datasets": datasets});
+            write_repl_keys(&state)?;
+            save_manage(cfg, &state)?;
+            Ok(format!("op=repl_allow host={host} datasets={}", datasets.join(",")))
+        }
+        "repl_key" => {
+            need(f.replication)?;
+            if !std::path::Path::new(REPL_KEY).exists() {
+                let _ = fs::create_dir_all("/var/lib/cairn-nas");
+                let comment = format!("cairn-repl@{}", read("/proc/sys/kernel/hostname").trim());
+                run(&["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", &comment, "-f", REPL_KEY], None)?;
+            }
+            Ok("op=repl_key".into())
+        }
+        "repl_pull_save" => {
+            need(f.replication)?;
+            let (host, source, target) = (s("host"), s("source"), s("target"));
+            if !is_host(&host) || host.contains('/') {
+                return Err("source machine: an IPv4 address or a host name".into());
+            }
+            if !source.split('/').all(is_name) {
+                return Err("source dataset refused".into());
+            }
+            let parent = target.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or_default();
+            if !is_dataset(&pools(), &target) || !cmd(&["zfs", "list", "-H", "-o", "name"]).lines().any(|l| l == parent) {
+                return Err("local dataset refused: inside an existing dataset of a pool, e.g. backup/tank".into());
+            }
+            if !std::path::Path::new(REPL_KEY).exists() {
+                return Err("create this machine's key first".into());
+            }
+            if !std::path::Path::new("/usr/sbin/syncoid").exists() {
+                return Err("syncoid is not installed (apt install sanoid)".into());
+            }
+            state["repl_pull"][target.as_str()] = json!({"host": host, "source": source});
+            install_repl_units(cfg)?;
+            save_manage(cfg, &state)?;
+            run(&["systemctl", "start", "--no-block", "cairn-repl.service"], None)?;
+            Ok(format!("op=repl_pull_save host={host} source={source} target={target}"))
+        }
+        "repl_pull_delete" => {
+            need(f.replication)?;
+            // The copy stays: the panel never deletes a dataset.
+            if state["repl_pull"].as_object_mut().and_then(|m| m.remove(&name)).is_none() {
+                return Err("unknown replication".into());
+            }
+            save_manage(cfg, &state)?;
+            Ok(format!("op=repl_pull_delete target={name}"))
+        }
+        "repl_run" => {
+            need(f.replication)?;
+            run(&["systemctl", "start", "--no-block", "cairn-repl.service"], None)?;
+            Ok("op=repl_run".into())
+        }
         _ => Err("unknown operation".into()),
     }
 }
@@ -1465,6 +1573,103 @@ fn disk_argv(op: &str, pool: &str, status: &str, free: &[String], a: &Value) -> 
 
 
 /* ---------- actions ---------- */
+
+/* ---------- replication (syncoid, pulled by the backup machine) ---------- */
+
+const REPL_USER: &str = "cairn-repl"; // on the source: may only zfs send (zfs allow send,hold)
+const REPL_HOME: &str = "/var/lib/cairn-repl";
+const REPL_KEY: &str = "/var/lib/cairn-nas/repl_ed25519"; // on the backup machine
+const REPL_MAX_AGE_S: u64 = 26 * 3600; // daily pull at 03:00, plus a margin
+// Kept on the backup machine per zfs-auto-snapshot label: longer than the source.
+const REPL_KEEP: [(&str, usize); 5] = [("frequent", 4), ("hourly", 24), ("daily", 62), ("weekly", 16), ("monthly", 24)];
+
+/// "ssh-ed25519 <base64>" from a pasted public key line (comment dropped).
+fn ssh_key(s: &str) -> Option<String> {
+    let mut f = s.split_whitespace();
+    let (kind, b64) = (f.next()?, f.next()?);
+    (kind == "ssh-ed25519" && (60..=100).contains(&b64.len()) && b64.chars().all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)))
+        .then(|| format!("{kind} {b64}"))
+}
+
+/// authorized_keys of the source account: each backup machine, from its own address only.
+fn render_repl_keys(state: &Value) -> String {
+    let mut out = format!("# Managed by {MARK}: backup machines allowed to pull (zfs send only).\n");
+    for (host, e) in state["repl_allow"].as_object().into_iter().flatten() {
+        out += &format!("from=\"{host}\",restrict {} {REPL_USER}@{host}\n", e["key"].as_str().unwrap_or(""));
+    }
+    out
+}
+
+/// Replication state only: nothing to render, so no apply() (and no firewall reload).
+fn save_manage(cfg: &Config, state: &Value) -> Result<(), String> {
+    write_atomic(&cfg.manage_file, &state.to_string())
+}
+
+fn write_repl_keys(state: &Value) -> Result<(), String> {
+    let dir = format!("{REPL_HOME}/.ssh");
+    fs::create_dir_all(&dir).map_err(|e| format!("{dir}: {e}"))?;
+    write_atomic(&format!("{dir}/authorized_keys"), &render_repl_keys(state))?;
+    run(&["chown", "-R", &format!("{REPL_USER}:"), &dir], None)?;
+    run(&["chmod", "-R", "go-rwx", &dir], None)
+}
+
+/// The nightly cairn-repl service: this binary with --pull.
+fn install_repl_units(cfg: &Config) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let units = [
+        ("/etc/systemd/system/cairn-repl.service", format!("# Managed by {MARK}.\n[Unit]\nDescription=cairn-nas: pull the replications set up in the panel\n\
+            After=network-online.target zfs.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nEnvironment=HOME=/root\nExecStart={} --pull {}\n",
+            exe.display(), cfg.path)),
+        ("/etc/systemd/system/cairn-repl.timer", format!("# Managed by {MARK}.\n[Unit]\nDescription=cairn-nas: nightly replication\n\n\
+            [Timer]\nOnCalendar=*-*-* 03:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n")),
+    ];
+    for (file, text) in &units {
+        if read(file) != *text {
+            write_atomic(file, text)?;
+        }
+    }
+    run(&["systemctl", "daemon-reload"], None)?;
+    run(&["systemctl", "enable", "--now", "cairn-repl.timer"], None)
+}
+
+fn pull_argv(host: &str, source: &str, target: &str) -> Vec<String> {
+    // --no-sync-snap: the source's own automatic snapshots are what is copied.
+    ["syncoid", "-r", "--no-sync-snap", "--no-privilege-elevation", &format!("--sshkey={REPL_KEY}"),
+        "--sshoption=StrictHostKeyChecking=accept-new", &format!("{REPL_USER}@{host}:{source}"), target]
+        .iter().map(|x| x.to_string()).collect()
+}
+
+/// Snapshots of one dataset (oldest first) beyond REPL_KEEP; manual ones are never touched.
+fn to_prune(names: &[&str]) -> Vec<String> {
+    let mut out = vec![];
+    for (label, keep) in REPL_KEEP {
+        let tag = format!("@zfs-auto-snap_{label}-");
+        let mine: Vec<&&str> = names.iter().filter(|n| n.contains(&tag)).collect();
+        out.extend(mine.iter().take(mine.len().saturating_sub(keep)).map(|n| n.to_string()));
+    }
+    out
+}
+
+/// `cairn-nas --pull <config>`: every pull set up in the panel, then pruning. Run by cairn-repl.service.
+fn pull(cfg: &Config) -> i32 {
+    let mut failed = 0;
+    for (target, j) in load_manage(cfg)["repl_pull"].as_object().into_iter().flatten() {
+        let argv = pull_argv(j["host"].as_str().unwrap_or(""), j["source"].as_str().unwrap_or(""), target);
+        eprintln!("pull {}", argv.join(" "));
+        if !Command::new(&argv[0]).args(&argv[1..]).status().is_ok_and(|s| s.success()) {
+            eprintln!("pull {target}: failed");
+            failed += 1;
+            continue;
+        }
+        for ds in cmd(&["zfs", "list", "-H", "-o", "name", "-r", target]).lines() {
+            let snaps = cmd(&["zfs", "list", "-H", "-t", "snapshot", "-o", "name", "-s", "creation", "-d", "1", ds]);
+            for snap in to_prune(&snaps.lines().collect::<Vec<_>>()) {
+                let _ = run(&["zfs", "destroy", &snap], None);
+            }
+        }
+    }
+    i32::from(failed > 0)
+}
 
 fn is_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c)) && s != "." && s != ".."
@@ -1861,6 +2066,10 @@ fn demo(mut r: Request) {
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: cairn-nas /etc/cairn-nas.json | --demo [address:port]");
+    if path == "--pull" {
+        let cfg = Config::load(&std::env::args().nth(2).expect("usage: cairn-nas --pull /etc/cairn-nas.json"));
+        std::process::exit(pull(&cfg));
+    }
     if path == "--demo" {
         let listen = std::env::args().nth(2).unwrap_or("127.0.0.1:8080".into());
         let server = Server::http(&listen).expect("cannot listen");
@@ -2106,6 +2315,23 @@ mod tests {
             "a replacement or resilver is in progress on this pool: wait for it to finish");
         assert!(go(resilver, json!({"op": "disk_offline", "device": "ata-B", "confirm": "tank"})).is_err());
         assert!(go(resilver, json!({"op": "disk_offline", "device": "replacing-1", "confirm": "tank"})).is_err());
+    }
+
+    #[test]
+    fn replication_setup() {
+        let k = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+        assert_eq!(ssh_key(&format!("{k} root@backup\n")).as_deref(), Some(k));
+        assert!(ssh_key("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC").is_none());
+        assert!(ssh_key(&format!("{k}\",command=\"sh")).is_none());
+        assert!(ssh_key("").is_none());
+        let state = json!({"repl_allow": {"10.0.0.1": {"key": k, "datasets": ["tank"]}}});
+        assert!(render_repl_keys(&state).ends_with(&format!("from=\"10.0.0.1\",restrict {k} cairn-repl@10.0.0.1\n")));
+        assert_eq!(pull_argv("nas", "tank", "backup/tank")[6..], ["cairn-repl@nas:tank", "backup/tank"]);
+        let mut names: Vec<String> = (0..6).map(|i| format!("b/t@zfs-auto-snap_frequent-{i}")).collect();
+        names.push("b/t@manual".into());
+        names.push("b/t@zfs-auto-snap_daily-1".into());
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(to_prune(&refs), ["b/t@zfs-auto-snap_frequent-0", "b/t@zfs-auto-snap_frequent-1"]);
     }
 
     #[test]

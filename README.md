@@ -46,7 +46,8 @@ Demo data.
 - **Dashboards**: read-only JSON summary for Homepage and the like.
 
 Optional (off by default): creating datasets and pools on blank disks
-(`features.pools`); replacing a pool's disks (`features.disks`), see below.
+(`features.pools`); replacing a pool's disks (`features.disks`); pull
+replication between two Cairn machines (`features.replication`), see below.
 
 ## Disk replacement (`features.disks`)
 
@@ -65,6 +66,29 @@ The server refuses:
   which `zpool` itself allows: replace it instead, redundancy is kept during
   the copy. `zpool` refuses on its own to offline the last valid copy;
 - log, cache and spare devices, and anything that is not a leaf of a data vdev.
+
+## Replication (`features.replication`)
+
+In **Backup**, with the feature on both machines. The backup machine pulls:
+a compromised source can neither change nor delete its copies.
+
+1. On the backup machine: *Create this machine's key*, copy the key shown.
+2. On the source: *Allow a backup machine* with the backup machine's IPv4
+   address, that key, and the datasets it may copy. The panel creates the
+   system account `cairn-repl`, gives it `zfs allow send,hold` on those
+   datasets only, and accepts the key from that address only
+   (`from="…",restrict`).
+3. On the backup machine: *New replication* (source machine, dataset,
+   local dataset to copy into). The first copy starts at once, then every
+   night at 03:00 (`cairn-repl.timer`, running `cairn-nas --pull`).
+
+Requirements: `syncoid` on the backup machine (`apt install sanoid`, plus
+`lzop mbuffer` for speed), SSH open from the backup machine to the source,
+and automatic snapshots on the source: they are what is copied (no snapshot
+of its own is created). The backup side keeps 4 quarter-hourly, 24 hourly,
+62 daily, 16 weekly and 24 monthly snapshots per dataset; manual snapshots
+are never pruned. Each copy shows in the Backup table and alerts after 26 h
+without a new snapshot. *Stop* and *Revoke* never delete data.
 
 ## Try it
 
@@ -112,7 +136,7 @@ with your own if you have one.
 | `tls` | `{cert, key}` (PEM): HTTPS, required with `login` |
 | `trusted_proxies`, `user_header`, `groups_header`, `require_groups` | proxy mode |
 | `services` | systemd units shown and restartable |
-| `features` | `{nfs, smb, users, pools, disks}`: allowed writes |
+| `features` | `{nfs, smb, users, pools, disks, replication}`: allowed writes |
 | `firewall_table` | nftables table holding the `cairn_nfs` / `cairn_smb` sets (absent: the firewall is never touched) |
 | `alerts` | `{url, headers_file, capacity_pct, interval_s}` |
 | `replication` | list of `{dataset, max_age_hours, snapshot_prefix}`: replicated datasets (with their children) shown in the Backup view (and an Overview tile) with their newest snapshot, alert past `max_age_hours` (26). On the receiving side any snapshot counts; on the sending side set `snapshot_prefix` to the one your tool creates per send (e.g. `syncoid_`) |
@@ -163,7 +187,9 @@ For the card icon, copy `www/icon.svg` into Homepage's `public/icons` and use
 
 Only its own files: `/etc/exports.d/cairn-nas.exports`,
 `/etc/samba/cairn-nas.conf` (included by `smb.conf`),
-`/etc/nftables.d/cairn-nas.nft`, and its state in `/var/lib/cairn-nas/`.
+`/etc/nftables.d/cairn-nas.nft`, and its state in `/var/lib/cairn-nas/`;
+with replication, `/etc/systemd/system/cairn-repl.{service,timer}` and the
+`cairn-repl` account's `authorized_keys`.
 Writes are a closed list of validated actions, run without a shell and
 logged with the account name (`journalctl -u cairn-nas`).
 
