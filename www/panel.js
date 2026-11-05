@@ -302,7 +302,7 @@ function fastTick() {
 
 function slowTick() {
   const f = FEAT();
-  const manage = f.nfs || f.smb || f.users || f.pools || f.disks || f.replication ? get("/api/manage") : Promise.resolve("");
+  const manage = f.nfs || f.smb || f.users || f.pools || f.disks || f.replication || f.iscsi ? get("/api/manage") : Promise.resolve("");
   return Promise.all([get("/api/slow"), manage]).then(([out, man]) => {
     if (man) M = JSON.parse(man);
     const [hk, pool, status, ds, snaps, ss, svc, ipj, speeds, models, exports, byid, health, repl] = sections(out);
@@ -662,10 +662,17 @@ function renderStorage() {
   // ZFS volumes (block devices, /dev/zvol/<name>): size, space used, compression.
   const vols = byTag(S.datasets.filter(isVol), r => "ds:" + r[0]);
   $("zvols-h").hidden = $("zvols-card").hidden = !vols.length;
-  $("zvols").innerHTML = "<thead><tr>" + ["Volume", "Size", "Used", "Ratio", "Block size", "Compression", ""].map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
+  const iscsi = FEAT().iscsi && M ? M.state.iscsi || {} : null;
+  $("zvols").innerHTML = "<thead><tr>" + ["Volume", "Size", "Used", "Ratio", "Block size", "Compression"].concat(iscsi ? ["iSCSI"] : [], [""]).map(h => "<th>" + t(h) + "</th>").join("") + "</tr></thead><tbody>" +
     vols.map(([name, used, , , ratio, comp, , , , , , size, vbs]) =>
       "<tr><td>" + nameBlock("ds:" + name, name, name) + "</td><td>" + bytes(Number(size)) + "</td><td>" + bytes(Number(used)) + "</td><td>× " + nf(Number(ratio), 2) +
-      "</td><td>" + bytes(Number(vbs)) + "</td><td>" + esc(comp) + '</td><td class="actions">' +
+      "</td><td>" + bytes(Number(vbs)) + "</td><td>" + esc(comp) +
+      // iSCSI controls in their own column: the target name is in the tooltip and the dialog.
+      (iscsi ? '</td><td class="actions">' + (iscsi[name]
+        ? '<button data-act="iscsi" data-ds="' + esc(name) + '" title="' + esc(iscsi[name].iqn) + '">' + tp(iscsi[name].initiators.length, "{n} machine", "{n} machines") + "</button>" +
+          '<button class="danger" data-act="iscsi-stop" data-ds="' + esc(name) + '">' + t("Stop") + "</button>"
+        : '<button data-act="iscsi" data-ds="' + esc(name) + '">' + t("Export") + "</button>") : "") +
+      '</td><td class="actions">' +
       (FEAT().pools ? '<button data-act="zvol-grow" data-ds="' + esc(name) + '" data-size="' + esc(size) + '">' + t("Grow") + "</button>" : "") +
       '<button data-act="ds-snap" data-ds="' + esc(name) + '">' + t("Snapshot") + "</button>" + del(name) + "</td></tr>").join("") + "</tbody>";
 
@@ -1038,6 +1045,22 @@ async function zvolGrow(name, size) {
   if (fd) mg({ op: "zvol_grow", dataset: name, size: fd.get("size") }, t("{name} grown", { name }));
 }
 
+// iSCSI export (features.iscsi): one target per volume, open only to the listed initiators.
+async function iscsiForm(name) {
+  const cur = (M.state.iscsi || {})[name];
+  const ips = Object.values(S.addrs).flatMap(a => a.ips.map(ip => ip.split("/")[0])).filter(ip => !ip.startsWith("127."));
+  const fd = await ask(cur ? t("iSCSI access to {name}", { name }) : t("Export {name} over iSCSI", { name }),
+    (cur ? '<p class="sub">' + t("Target: {iqn}", { iqn: "<code>" + esc(cur.iqn) + "</code>" }) + "</p>" : "") +
+    '<p class="sub">' + t("Portal: port 3260 on {ips}. No machine is allowed by default: list each one by its iSCSI name (on Linux and Proxmox: /etc/iscsi/initiatorname.iscsi). A volume must be used by one machine at a time, unless a cluster file system manages it.", { ips: esc(ips.join(", ") || "—") }) + "</p>" +
+    "<label>" + t("Allowed machines (one iSCSI name per line)") + '<textarea name="ini" required rows="4" placeholder="iqn.1993-08.org.debian:01:…">' + esc((cur ? cur.initiators : []).join("\n")) + "</textarea></label>",
+    cur ? t("Save") : t("Export"));
+  if (fd) mg({ op: "iscsi_save", zvol: name, initiators: fd.get("ini").split(/\s+/).filter(Boolean) }, t("{name} exported over iSCSI", { name }));
+}
+async function iscsiStop(name) {
+  const fd = await ask(t("Stop the iSCSI export of {name}?", { name }), "<p>" + t("Connected machines lose this disk at once. The data stays on the volume.") + "</p>", t("Stop the export"), true);
+  if (fd) mg({ op: "iscsi_delete", zvol: name }, t("iSCSI export of {name} stopped", { name }));
+}
+
 // Deletion: permanent, the full name retyped; the server refuses while a share, an export or a replication uses it.
 const confirmName = () => "<label>" + t("Confirmation: retype the full name") + '<input name="confirm" required autocomplete="off"></label>';
 async function destroyDataset(name) {
@@ -1207,6 +1230,8 @@ document.addEventListener("click", e => {
     case "pool-new": return poolForm();
     case "zvol-new": return zvolForm();
     case "zvol-grow": return zvolGrow(d.ds, d.size);
+    case "iscsi": return iscsiForm(d.ds);
+    case "iscsi-stop": return iscsiStop(d.ds);
     case "ds-del": return destroyDataset(d.ds);
     case "pool-del": return destroyPool(d.pool);
     case "disk-offline": return diskOffline(d.pool, d.dev);

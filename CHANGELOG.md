@@ -4,6 +4,7 @@
 
 - ZFS volumes (zvols) in Storage: list (size, used, ratio, block size), create (thin or reserved, block size, compression) and grow, with `features.pools`.
 - Deletion of datasets, volumes and pools from Storage (`features.pools`): full name retyped, refused while a share, an `/etc/exports` path or a replication uses it, children only when asked, never a pool root, never forced; snapshots go with it.
+- iSCSI export of volumes (`features.iscsi`, LIO through `targetcli`): one target per volume, access only for the listed initiators, restored at boot after the ZFS volumes; an exported volume cannot be deleted.
 
 ## 0.1.0 (2026-11-05)
 

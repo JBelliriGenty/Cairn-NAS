@@ -49,7 +49,8 @@ Demo data.
 Optional (off by default): creating and deleting datasets, volumes and
 pools (`features.pools`, see below); replacing a pool's disks
 (`features.disks`); pull replication between two Cairn machines
-(`features.replication`), see below.
+(`features.replication`); iSCSI export of volumes (`features.iscsi`), see
+below.
 
 ## Datasets, volumes and pools (`features.pools`)
 
@@ -61,8 +62,8 @@ datasets, volumes and pools.
 Deletion is permanent, snapshots included. The server refuses rather than
 warns:
 - unless the full name (or the pool name) is typed again;
-- while an NFS or SMB share of the panel, a path of `/etc/exports` or a
-  replication points into it (children included);
+- while an NFS or SMB share of the panel, a path of `/etc/exports`, an
+  iSCSI export or a replication points into it (children included);
 - a dataset with child datasets, unless *With its children* is ticked
   (`zfs destroy -r`); its own snapshots always go with it;
 - the root dataset of a pool: delete the pool instead (`zpool destroy`,
@@ -70,6 +71,20 @@ warns:
 
 Never `-f` or `-R`: a busy mount, a hold or a clone makes `zfs` refuse, and
 its message is shown. Every deletion is in the action journal.
+
+## iSCSI export of volumes (`features.iscsi`)
+
+Needs `targetcli-fb` (LIO, the kernel's own target). In **Storage**, each
+volume gets *Export over iSCSI*: one target per volume
+(`<iscsi_base>:<pool>.<volume>`, `iscsi_base` defaults to
+`iqn.2003-01.org.linux-iscsi.<hostname>`), its single LUN, and access only
+for the machines listed by their initiator name (on Linux and Proxmox:
+`/etc/iscsi/initiatorname.iscsi`). There is no "open to all" mode and no
+CHAP: restrict TCP port 3260 to those machines in your firewall. The
+configuration is saved with `targetcli saveconfig` and restored at boot by
+`rtslib-fb-targetctl`, which Cairn orders after `zfs-volumes.target`. An
+exported volume, or its pool, cannot be deleted; *Stop the export*
+disconnects the machines at once and keeps the data.
 
 ## Disk replacement (`features.disks`)
 

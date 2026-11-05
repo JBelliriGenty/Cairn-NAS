@@ -106,6 +106,16 @@ const DICT = {
     "Refused while a share, an export or a replication points into it. The disks are left as they are (not wiped): they become free again only once erased.":
       "Refusé tant qu'un partage, un export ou une réplication pointe dedans. Les disques restent en l'état (non effacés) : ils ne redeviennent libres qu'une fois effacés.",
     "Pool {name} deleted": "Pool {name} supprimé",
+    "iSCSI": "iSCSI", "{n} machine": "{n} machine", "{n} machines": "{n} machines",
+    "Stop the export": "Arrêter l'export",
+    "iSCSI access to {name}": "Accès iSCSI à {name}", "Export {name} over iSCSI": "Exporter {name} en iSCSI", "Target: {iqn}": "Cible : {iqn}",
+    "Portal: port 3260 on {ips}. No machine is allowed by default: list each one by its iSCSI name (on Linux and Proxmox: /etc/iscsi/initiatorname.iscsi). A volume must be used by one machine at a time, unless a cluster file system manages it.":
+      "Portail : port 3260 sur {ips}. Aucune machine n'est autorisée par défaut : indiquez chacune par son nom iSCSI (sous Linux et Proxmox : /etc/iscsi/initiatorname.iscsi). Un volume ne doit servir qu'à une machine à la fois, sauf système de fichiers de cluster.",
+    "Allowed machines (one iSCSI name per line)": "Machines autorisées (un nom iSCSI par ligne)", "Export": "Exporter",
+    "{name} exported over iSCSI": "{name} exporté en iSCSI",
+    "Stop the iSCSI export of {name}?": "Arrêter l'export iSCSI de {name} ?",
+    "Connected machines lose this disk at once. The data stays on the volume.": "Les machines connectées perdent ce disque immédiatement. Les données restent sur le volume.",
+    "iSCSI export of {name} stopped": "Export iSCSI de {name} arrêté",
     "Block size": "Bloc", "Quota": "Quota", "Auto snapshots": "Snapshots auto", "Snapshot": "Snapshot",
     "No snapshots. Use the “Snapshot” button on a dataset to create one.": "Aucun snapshot. Bouton « Snapshot » sur un dataset pour en créer un.",
     "Unique size": "Taille propre", "Created": "Créé le", "{n} dataset": "{n} dataset", "{n} datasets": "{n} datasets",

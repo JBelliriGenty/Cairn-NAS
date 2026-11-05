@@ -57,6 +57,7 @@ struct Config {
     summary_token: Option<String>, // bearer token for /api/summary only
     lang: String, // alerts, /api/summary, and the page when the browser asks for no known language
     replication: Vec<Replica>,
+    iscsi_base: String, // target names: <iscsi_base>:<volume>
     path: String, // this config file, for the cairn-repl service
     public: Value,      // what /api/config returns (labels, title…)
 }
@@ -100,7 +101,7 @@ impl Config {
         let recycle_days = v["recycle_days"].as_u64().unwrap_or(30).max(1);
         public["recycle_days"] = json!(recycle_days); // the effective value, even when unset
         let f = |k: &str| v["features"][k].as_bool().unwrap_or(false);
-        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), disks: f("disks"), replication: f("replication") };
+        let features = Features { nfs: f("nfs"), smb: f("smb"), users: f("users"), pools: f("pools"), disks: f("disks"), replication: f("replication"), iscsi: f("iscsi") };
         let firewall_table = v["firewall_table"].as_str().map(String::from);
         let l = &v["login"];
         let login = l.is_object().then(|| Login {
@@ -120,7 +121,7 @@ impl Config {
             capacity_pct: a["capacity_pct"].as_u64().unwrap_or(85),
             interval_s: a["interval_s"].as_u64().unwrap_or(300).max(60),
         });
-        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "disks": features.disks, "replication": features.replication,
+        public["features"] = json!({"nfs": features.nfs, "smb": features.smb, "users": features.users, "pools": features.pools, "disks": features.disks, "replication": features.replication, "iscsi": features.iscsi,
             "firewall": firewall_table.is_some(), "login": login.is_some(), "autosnap": std::path::Path::new("/usr/sbin/zfs-auto-snapshot").exists()});
         Config {
             listen: s("listen", "127.0.0.1:9091"),
@@ -153,6 +154,8 @@ impl Config {
                 assert!(t.len() >= 32, "summary_token_file: token shorter than 32 characters");
                 t
             }),
+            iscsi_base: v["iscsi_base"].as_str().map(String::from)
+                .unwrap_or_else(|| format!("iqn.2003-01.org.linux-iscsi.{}", iqn_part(read("/proc/sys/kernel/hostname").trim()))),
             path: path.to_string(),
             public,
         }
@@ -472,6 +475,10 @@ const FR: &[(&str, &str)] = &[
     ("a volume can only grow: give a size larger than the current one", "un volume ne peut que grandir : indiquez une taille supérieure à l'actuelle"),
     ("never the root of a pool: delete the pool instead", "jamais la racine d'un pool : supprimez plutôt le pool"),
     ("unknown dataset", "dataset inconnu"),
+    ("targetcli is not installed (apt install targetcli-fb)", "targetcli n'est pas installé (apt install targetcli-fb)"),
+    ("unknown export", "export inconnu"),
+    ("initiators: one iSCSI name (iqn.…) per machine, 32 at most", "initiateurs : un nom iSCSI (iqn.…) par machine, 32 au plus"),
+    ("another volume already has this iSCSI name", "un autre volume a déjà ce nom iSCSI"),
     ("confirmation: type the full name again", "confirmation : retapez le nom complet"),
     ("still in use, remove it first from: {}", "encore utilisé, retirez-le d'abord de : {}"),
     ("it has child datasets: tick “with its children” to delete them too", "il contient des datasets enfants : cochez « avec ses enfants » pour les supprimer aussi"),
@@ -693,6 +700,7 @@ struct Features {
     pools: bool,
     disks: bool, // take pool members offline/online, replace them
     replication: bool, // let a backup machine pull this one, pull others (syncoid)
+    iscsi: bool, // export volumes over iSCSI (LIO, targetcli)
 }
 
 static MANAGE: Mutex<()> = Mutex::new(());
@@ -1379,6 +1387,34 @@ fn manage_op(cfg: &Config, a: &Value) -> Result<String, String> {
             run(&argv.iter().map(String::as_str).collect::<Vec<_>>(), None)?;
             Ok(format!("op={op} argv={}", argv.join(" ")))
         }
+        "iscsi_save" | "iscsi_delete" => {
+            need(f.iscsi)?;
+            if !std::path::Path::new("/usr/bin/targetcli").exists() {
+                return Err("targetcli is not installed (apt install targetcli-fb)".into());
+            }
+            let zvol = s("zvol");
+            let fresh = !state["iscsi"][zvol.as_str()].is_object();
+            let (cmds, entry) = iscsi_plan(&op, a, &zfs_rows(), &state, &cfg.iscsi_base)?;
+            install_iscsi_dropin()?;
+            for c in &cmds {
+                if let Err(e) = run(&c.iter().map(String::as_str).collect::<Vec<_>>(), None) {
+                    // A new export is undone; a changed one keeps what was applied (targetcli ls shows it).
+                    if fresh && op == "iscsi_save" {
+                        let _ = run(&["targetcli", "/iscsi", "delete", entry["iqn"].as_str().unwrap_or("")], None);
+                        let _ = run(&["targetcli", "/backstores/block", "delete", entry["backstore"].as_str().unwrap_or("")], None);
+                    }
+                    return Err(e);
+                }
+            }
+            run(&["targetcli", "saveconfig"], None)?;
+            if entry.is_null() {
+                state["iscsi"].as_object_mut().map(|m| m.remove(&zvol));
+            } else {
+                state["iscsi"][zvol.as_str()] = entry.clone();
+            }
+            save_manage(cfg, &state)?;
+            Ok(format!("op={op} zvol={zvol} target={} initiators={}", entry["iqn"].as_str().unwrap_or("-"), strings(&entry, "initiators").join(",")))
+        }
         "pool_create" => {
             need(f.pools)?;
             let (layout, wanted) = (s("layout"), strings(a, "disks"));
@@ -1595,6 +1631,70 @@ fn disk_argv(op: &str, pool: &str, status: &str, free: &[String], a: &Value) -> 
 }
 
 
+/* ---------- iSCSI export of volumes (LIO, targetcli) ---------- */
+
+const ISCSI_DROPIN: &str = "/etc/systemd/system/rtslib-fb-targetctl.service.d/cairn-nas.conf";
+
+/// Lowercase, `/` -> `.`, `_` -> `-`: what an iSCSI name accepts.
+fn iqn_part(s: &str) -> String {
+    s.to_ascii_lowercase().replace('/', ".").replace('_', "-")
+}
+
+/// An initiator name: iqn.… or eui.…, lowercase letters, digits, `.`, `-`, `:`.
+fn is_iqn(s: &str) -> bool {
+    (s.starts_with("iqn.") || s.starts_with("eui.")) && s.len() <= 223 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || ".-:".contains(c))
+}
+
+/// targetcli commands for iscsi_save / iscsi_delete of a volume, and the new
+/// state entry (Null when deleted). One target per volume, its single LUN,
+/// access only for the listed initiators (LIO's default: no ACL, no access).
+fn iscsi_plan(op: &str, a: &Value, rows: &[Zrow], state: &Value, base: &str) -> Result<(Vec<Vec<String>>, Value), String> {
+    let zvol = a["zvol"].as_str().unwrap_or("").to_string();
+    let old = &state["iscsi"][zvol.as_str()];
+    let tc = |x: &[&str]| -> Vec<String> { std::iter::once("targetcli").chain(x.iter().copied()).map(String::from).collect() };
+    if op == "iscsi_delete" {
+        let (Some(iqn), Some(bs)) = (old["iqn"].as_str(), old["backstore"].as_str()) else { return Err("unknown export".into()) };
+        return Ok((vec![tc(&["/iscsi", "delete", iqn]), tc(&["/backstores/block", "delete", bs])], Value::Null));
+    }
+    if !rows.iter().any(|r| r.name == zvol && r.kind == "volume") {
+        return Err("unknown volume".into());
+    }
+    let mut inits: Vec<String> = strings(a, "initiators").iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    inits.sort();
+    inits.dedup();
+    if inits.is_empty() || inits.len() > 32 || !inits.iter().all(|i| is_iqn(i)) {
+        return Err("initiators: one iSCSI name (iqn.…) per machine, 32 at most".into());
+    }
+    let (iqn, bs) = (format!("{base}:{}", iqn_part(&zvol)), format!("cairn.{}", iqn_part(&zvol)));
+    if state["iscsi"].as_object().into_iter().flatten().any(|(z, e)| z != &zvol && e["iqn"] == iqn.as_str()) {
+        return Err("another volume already has this iSCSI name".into());
+    }
+    let acls = format!("/iscsi/{iqn}/tpg1/acls");
+    let mut cmds = vec![];
+    let before = if old.is_object() {
+        strings(old, "initiators")
+    } else {
+        cmds.push(tc(&["/backstores/block", "create", &format!("name={bs}"), &format!("dev=/dev/zvol/{zvol}")]));
+        cmds.push(tc(&["/iscsi", "create", &iqn]));
+        cmds.push(tc(&[&format!("/iscsi/{iqn}/tpg1/luns"), "create", &format!("/backstores/block/{bs}")]));
+        vec![]
+    };
+    cmds.extend(before.iter().filter(|i| !inits.contains(i)).map(|i| tc(&[&acls, "delete", i])));
+    cmds.extend(inits.iter().filter(|i| !before.contains(i)).map(|i| tc(&[&acls, "create", i])));
+    Ok((cmds, json!({"iqn": iqn, "backstore": bs, "initiators": inits})))
+}
+
+/// Exports are restored at boot by rtslib-fb-targetctl: after the zvols exist.
+fn install_iscsi_dropin() -> Result<(), String> {
+    let text = format!("# Managed by {MARK}: restore iSCSI exports once the ZFS volumes exist.\n[Unit]\nAfter=zfs-volumes.target\nWants=zfs-volumes.target\n");
+    if read(ISCSI_DROPIN) != text {
+        let _ = fs::create_dir_all("/etc/systemd/system/rtslib-fb-targetctl.service.d");
+        write_atomic(ISCSI_DROPIN, &text)?;
+        run(&["systemctl", "daemon-reload"], None)?;
+    }
+    Ok(())
+}
+
 /* ---------- actions ---------- */
 
 /* ---------- replication (syncoid, pulled by the backup machine) ---------- */
@@ -1781,6 +1881,7 @@ fn in_use(state: &Value, exports: &[String], under: &[&Zrow]) -> Vec<String> {
             out.push(format!("repl:{host}"));
         }
     }
+    out.extend(state["iscsi"].as_object().into_iter().flatten().filter(|(z, _)| names.contains(&z.as_str())).map(|(z, _)| format!("iscsi:{z}")));
     out.extend(state["repl_pull"].as_object().into_iter().flatten().filter(|(t, _)| names.contains(&t.as_str())).map(|(t, _)| format!("repl:{t}")));
     out
 }
@@ -2545,6 +2646,45 @@ mod tests {
         let pulled = json!({"repl_pull": {"tank/a/b": {"host": "nas", "source": "x"}}});
         assert_eq!(go(ds("tank/a", "tank/a", true), &pulled, &[]).unwrap_err(), "still in use, remove it first from: repl:tank/a/b");
         assert_eq!(tr("fr", "still in use, remove it first from: nfs:media"), "encore utilisé, retirez-le d'abord de : nfs:media");
+    }
+
+    #[test]
+    fn iscsi() {
+        let rows = parse_zrows("tank\tfilesystem\t/tank\t-\t-\ntank/VM_1\tvolume\t-\t1073741824\t16384\ntank/vm.1\tvolume\t-\t1073741824\t16384\n");
+        let base = "iqn.2003-01.org.linux-iscsi.nas";
+        let ini = "iqn.1993-08.org.debian:01:abc";
+        let empty = json!({});
+        let go = |a: Value, st: &Value| iscsi_plan(a["op"].as_str().unwrap(), &a, &rows, st, base);
+        let (cmds, entry) = go(json!({"op": "iscsi_save", "zvol": "tank/VM_1", "initiators": [ini, " ", ini]}), &empty).unwrap();
+        let t = "iqn.2003-01.org.linux-iscsi.nas:tank.vm-1";
+        assert_eq!(cmds, [
+            vec!["targetcli", "/backstores/block", "create", "name=cairn.tank.vm-1", "dev=/dev/zvol/tank/VM_1"],
+            vec!["targetcli", "/iscsi", "create", t],
+            vec!["targetcli", &format!("/iscsi/{t}/tpg1/luns"), "create", "/backstores/block/cairn.tank.vm-1"],
+            vec!["targetcli", &format!("/iscsi/{t}/tpg1/acls"), "create", ini],
+        ]);
+        assert_eq!(entry, json!({"iqn": t, "backstore": "cairn.tank.vm-1", "initiators": [ini]}));
+        // Existing export: only the access list changes.
+        let st = json!({"iscsi": {"tank/VM_1": entry}});
+        let other = "iqn.2026-11.home.pve:node2";
+        let (cmds, _) = go(json!({"op": "iscsi_save", "zvol": "tank/VM_1", "initiators": [other]}), &st).unwrap();
+        assert_eq!(cmds, [vec!["targetcli", &format!("/iscsi/{t}/tpg1/acls"), "delete", ini], vec!["targetcli", &format!("/iscsi/{t}/tpg1/acls"), "create", other]]);
+        // Refusals: no access list (never open to all), bad names, a filesystem, a name taken.
+        for bad in [json!([]), json!(["*"]), json!(["IQN.1993-08.x"]), json!(["iqn.x y"]), json!(["iqn.a\",b"]), json!((0..33).map(|i| format!("iqn.x:{i}")).collect::<Vec<_>>())] {
+            assert!(go(json!({"op": "iscsi_save", "zvol": "tank/VM_1", "initiators": bad}), &empty).is_err(), "{bad}");
+        }
+        assert_eq!(go(json!({"op": "iscsi_save", "zvol": "tank", "initiators": [ini]}), &empty).unwrap_err(), "unknown volume");
+        let clash = json!({"iscsi": {"tank/vm.1": {"iqn": "iqn.2003-01.org.linux-iscsi.nas:tank.vm.1"}}});
+        assert!(go(json!({"op": "iscsi_save", "zvol": "tank/vm.1", "initiators": [ini]}), &clash).is_ok()); // its own
+        let clash = json!({"iscsi": {"tank/other": {"iqn": t}}});
+        assert_eq!(go(json!({"op": "iscsi_save", "zvol": "tank/VM_1", "initiators": [ini]}), &clash).unwrap_err(), "another volume already has this iSCSI name");
+        let (cmds, gone) = go(json!({"op": "iscsi_delete", "zvol": "tank/VM_1"}), &st).unwrap();
+        assert_eq!(cmds, [vec!["targetcli", "/iscsi", "delete", t], vec!["targetcli", "/backstores/block", "delete", "cairn.tank.vm-1"]]);
+        assert!(gone.is_null());
+        assert_eq!(go(json!({"op": "iscsi_delete", "zvol": "tank/vm.1"}), &st).unwrap_err(), "unknown export");
+        // An exported volume (or its pool) cannot be deleted.
+        let a = json!({"op": "dataset_destroy", "dataset": "tank/VM_1", "confirm": "tank/VM_1"});
+        assert_eq!(destroy_argv("dataset_destroy", &a, &rows, &[], &["tank".into()], &st, &[]).unwrap_err(), "still in use, remove it first from: iscsi:tank/VM_1");
     }
 
     #[test]
