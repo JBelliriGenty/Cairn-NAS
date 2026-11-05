@@ -107,15 +107,16 @@ h3 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
 
 /* cards and grids */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
-#offsite { display: grid; gap: 12px; }
+/* minmax(0, 1fr): an implicit auto track grows to its widest nowrap table instead of letting .table-wrap scroll */
+#offsite { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .card.tagged { border-left: 4px solid var(--tag); }
-.grid { display: grid; gap: 14px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .tiles { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin-top: 14px; }
 .net { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .disks { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); margin-top: 12px; }
 .sys { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .sys .wide { grid-column: 1 / -1; }
-@media (max-width: 820px) { .sys { grid-template-columns: 1fr; } }
+@media (max-width: 820px) { .sys { grid-template-columns: minmax(0, 1fr); } }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .label { color: var(--muted); font-size: 12px; }
 .big { font-size: 22px; margin-left: auto; }
@@ -271,7 +272,11 @@ td.actions button.danger:not(:hover):not(:focus-visible) { background: var(--pan
   .table-wrap td { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; border: 0; white-space: normal; text-align: right; }
   .table-wrap td:first-child { text-align: left; }
   .table-wrap td[data-label]:not(:first-child)::before { content: attr(data-label); color: var(--muted); font-size: 12px; text-align: left; }
-  .table-wrap td.actions { justify-content: flex-start; flex-wrap: wrap; padding-top: 8px; }
+  .table-wrap td.actions { justify-content: flex-start; flex-wrap: wrap; gap: 6px; padding: 8px 0 0; }
+  .table-wrap td.actions button { margin: 0; }
+  /* a multi-line cell (pill + button<br>note) would be one unwrapped flex row: label on top instead */
+  .table-wrap td:has(> br) { display: block; }
+  .table-wrap td:has(> br)::before { display: block; }
 }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -279,11 +284,17 @@ th { color: var(--muted); font-weight: 500; font-size: 12px; }
 tr:last-child td { border-bottom: 0; }
 tr.auto td { color: var(--muted); }
 /* Stays a table cell (display: flex would detach it from the row's borders). */
-td.actions { text-align: right; }
+/* Buttons and error notes wrap only when the table is wider than its card;
+   padding-block 6px + margin-block 3px keeps the row height of a single line. */
+td.actions { text-align: right; white-space: normal; padding-block: 6px; }
+td.actions button { margin-block: 3px; }
 td.actions button + button { margin-left: 6px; }
+/* Cells already on several lines (pill + button<br>note, error message) and the off-site
+   text columns take their share of the shrink, so the buttons go two by two, not one per line. */
+td:has(> br), #offsite td { white-space: normal; }
 .svc { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .svc:last-child { border-bottom: 0; }
-.view[data-view="services"]:not([hidden]) { display: grid; gap: 14px; }
+.view[data-view="services"]:not([hidden]) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .svc .sub { margin: 0 0 0 auto; }
 
 /* buttons, dialog */

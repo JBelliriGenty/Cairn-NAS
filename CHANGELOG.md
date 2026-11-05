@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix: in Backup, the off-site cards and their table no longer run past the page at desktop widths; wide tables (Backups, Datasets) wrap their buttons two by two instead of hiding them behind a horizontal scroll, and multi-line cells (encryption, a failed run's message) fit on phones.
+
 ## 0.2.0 (2026-11-05)
 
 - Fix: *Update* failed with "read-only file system" (the service's `ProtectSystem` keeps `/usr` read-only); apt now runs in a transient unit (`systemd-run`), after `dpkg --configure -a` to finish an interrupted run.
