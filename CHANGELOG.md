@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-11-08)
 
+- `/api/slow` ends with the SMB shares the panel manages (its `smb_file`), so a dashboard reading it with the summary token sees them too.
 - Fix: in Backup, the off-site cards and their table no longer run past the page at desktop widths; wide tables (Backups, Datasets) wrap their buttons two by two instead of hiding them behind a horizontal scroll, and multi-line cells (encryption, a failed run's message) fit on phones.
 
 ## 0.2.0 (2026-11-05)

@@ -274,6 +274,8 @@ fn slow(cfg: &Config) -> String {
         by_id(),
         health(),
         repl,
+        // The SMB shares the panel manages (its own smb_file), last so the sections above keep their place.
+        if cfg.features.smb { read(&cfg.smb_file) } else { String::new() },
     ])
 }
 
