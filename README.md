@@ -326,6 +326,9 @@ with your own if you have one.
 
 ## Configuration (`/etc/cairn-nas.json`)
 
+Every key, its type and default, the files the page and the panel write,
+and short recipes: [docs/configuration.md](docs/configuration.md).
+
 | Key | Purpose |
 |---|---|
 | `listen` | listen address:port |
