@@ -2693,6 +2693,32 @@ fn main() {
 mod tests {
     use super::*;
 
+    const SOURCES: [(&str, &str, &str); 2] = [(include_str!("main.rs"), "fn load(path: &str) -> Config {", "
+    }
+"), (include_str!("peers.rs"), "pub(crate) fn load(", "
+}
+")];
+
+    /// Every key the config loader reads is in docs/configuration.md (a key added to the code and not to the doc fails).
+    #[test]
+    fn config_keys_documented() {
+        let doc = include_str!("../docs/configuration.md");
+        let ident = |k: &str| !k.is_empty() && k.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        let mut keys: Vec<&str> = vec![];
+        for (src, start, end) in SOURCES {
+            let body = &src[src.find(start).unwrap()..];
+            let body = &body[..body.find(end).unwrap()];
+            for pre in ["[\"", "s(\"", "f(\"", "&v, \""] {
+                keys.extend(body.split(pre).skip(1).filter_map(|p| p.split('"').next()).filter(|k| ident(k)));
+            }
+            for list in body.split("in [").skip(1).filter_map(|p| p.split(']').next()) {
+                keys.extend(list.split('"').skip(1).step_by(2).filter(|k| ident(k)));
+            }
+        }
+        let missing: Vec<&str> = keys.into_iter().filter(|k| !doc.contains(&format!("`{k}`"))).collect();
+        assert!(missing.is_empty(), "config keys missing from docs/configuration.md: {missing:?}");
+    }
+
     fn argv(a: Value) -> Result<Vec<String>, String> {
         build_argv(&["tank".to_string(), "fast".to_string()], &["nfs-server".to_string()], &a, || vec!["tank/cloud@a".to_string()])
     }

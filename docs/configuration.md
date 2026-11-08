@@ -42,7 +42,7 @@ own files are read on each request.
 | `subtitle` | string | none | |
 | `lang` | `"en"` \| `"fr"` | `"en"` | alerts and `/api/summary`; the page's default when the browser asks for neither; each viewer can switch |
 | `login` | object | none | built-in sign-in, see [`login`](#login); needs `tls` |
-| `tls` | `{"cert", "key"}` | none | PEM files; both set: HTTPS, else plain HTTP |
+| `tls` | `{"cert", "key"}` | none | PEM files `cert` and `key`; both set: HTTPS, else plain HTTP |
 | `trusted_proxies` | list of IPs | `[]` | proxy mode: only these exact addresses (no CIDR) are answered |
 | `user_header` | string | `"Remote-User"` | proxy mode: the signed-in user |
 | `groups_header` | string | `"Remote-Groups"` | proxy mode: comma-separated groups |
