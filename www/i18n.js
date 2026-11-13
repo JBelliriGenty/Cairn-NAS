@@ -63,7 +63,7 @@ const DICT = {
     "Per thread": "Par thread", "Applications": "Applications", "ZFS cache (ARC)": "Cache ZFS (ARC)",
     "System cache": "Cache système", "Free": "Libre", "Load (over {n} threads)": "Charge (sur {n} threads)",
     "Uptime": "Allumé depuis", "Kernel": "Noyau", "ARC (hit rate)": "ARC (succès)",
-    "CPU (package)": "CPU (paquet)", "CPU (hottest core)": "CPU (cœur le plus chaud)", "Temperatures": "Températures",
+    "CPU (package)": "CPU (paquet)", "CPU (hottest core)": "CPU (cœur le plus chaud)", "Temperatures": "Températures", "Fans": "Ventilateurs", "rpm": "tr/min",
     // network
     "no link": "pas de lien",
     // disks

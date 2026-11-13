@@ -188,6 +188,8 @@ h3 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
 .meter.bad .bar i { background: var(--bad); }
 .temps { columns: 2 320px; column-gap: 28px; }
 .temps .meter { break-inside: avoid; }
+.fans-label { display: block; margin-top: 14px; }
+.fans .meter { grid-template-columns: minmax(110px, 200px) 1fr; }
 
 /* CPU threads */
 .threads { display: grid; grid-template-columns: repeat(auto-fill, minmax(22px, 1fr)); gap: 4px; margin-top: 8px; }

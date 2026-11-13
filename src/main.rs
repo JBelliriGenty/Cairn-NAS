@@ -66,6 +66,7 @@ struct Config {
     peers: Vec<peers::Peer>, // other Cairn instances shown in Machines
     peer_unreachable_s: u64, // alert when a peer stays unreachable this long
     iscsi_base: String, // target names: <iscsi_base>:<volume>
+    fans: Vec<(String, u64)>, // extra fans only the ACPI embedded controller knows: (label, EC offset)
     path: String, // this config file, for the cairn-repl service
     public: Value,      // what /api/config returns (labels, title…)
 }
@@ -168,6 +169,10 @@ impl Config {
             peer_unreachable_s: v["peer_unreachable_minutes"].as_u64().unwrap_or(15).max(1) * 60,
             iscsi_base: v["iscsi_base"].as_str().map(String::from)
                 .unwrap_or_else(|| format!("iqn.2003-01.org.linux-iscsi.{}", iqn_part(read("/proc/sys/kernel/hostname").trim()))),
+            fans: v["fans"].as_array().into_iter().flatten().map(|f| {
+                let label = f[0].as_str().expect("fans: [label, \"ec:0xNN\"] pairs").to_string();
+                (label, ec_offset(f[1].as_str().unwrap_or("")).expect("fans: source must be \"ec:0xNN\" (0x00-0xfe)"))
+            }).collect(),
             path: path.to_string(),
             public,
         }
@@ -221,7 +226,45 @@ fn hwmon() -> String {
     out
 }
 
-fn fast() -> String {
+/// "ec:0x76" -> 0x76: a 16-bit big-endian fan speed at that offset of the ACPI EC
+/// (the second byte must fit in the 256-byte space).
+fn ec_offset(src: &str) -> Option<u64> {
+    let o = u64::from_str_radix(src.strip_prefix("ec:0x")?, 16).ok()?;
+    (o < 0xff).then_some(o)
+}
+
+/// Fan speeds as "label|rpm" lines: every hwmon fanN_input, then the config's
+/// EC fans (read from the ec_sys debugfs file, two bytes each, read only).
+fn fans(cfg: &Config) -> String {
+    use std::io::{Read as _, Seek, SeekFrom};
+    let mut out = String::new();
+    if let Ok(dirs) = fs::read_dir("/sys/class/hwmon") {
+        for d in dirs.flatten() {
+            let p = d.path().display().to_string();
+            let Ok(files) = fs::read_dir(&p) else { continue };
+            for f in files.flatten() {
+                let file = f.file_name().to_string_lossy().into_owned();
+                let Some(n) = file.strip_prefix("fan").and_then(|r| r.strip_suffix("_input")) else { continue };
+                let label = read(&format!("{p}/fan{n}_label")).trim().to_string();
+                let label = if label.is_empty() { format!("{} {n}", read(&format!("{p}/name")).trim()) } else { label };
+                out += &format!("{label}|{}\n", read(&f.path().to_string_lossy()).trim());
+            }
+        }
+    }
+    if !cfg.fans.is_empty() {
+        if let Ok(mut ec) = fs::File::open("/sys/kernel/debug/ec/ec0/io") {
+            for (label, o) in &cfg.fans {
+                let mut b = [0u8; 2];
+                if ec.seek(SeekFrom::Start(*o)).and_then(|_| ec.read_exact(&mut b)).is_ok() {
+                    out += &format!("{label}|{}\n", u16::from_be_bytes(b));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn fast(cfg: &Config) -> String {
     let arc: String = read("/proc/spl/kstat/zfs/arcstats")
         .lines()
         .filter(|l| ["size ", "c_max ", "hits ", "misses "].iter().any(|k| l.starts_with(k)))
@@ -235,6 +278,7 @@ fn fast() -> String {
         arc,
         hwmon(),
         read("/proc/loadavg") + &read("/proc/uptime"),
+        fans(cfg),
     ])
 }
 
@@ -2459,7 +2503,7 @@ fn handle(cfg: &Config, mut r: Request) {
                     respond(r, 200, body, "application/json")
                 }
                 "/api/config" => respond(r, 200, config_json(cfg, "").to_string(), "application/json"),
-                "/api/fast" => respond(r, 200, fast(), "text/plain"),
+                "/api/fast" => respond(r, 200, fast(cfg), "text/plain"),
                 _ => respond(r, 200, slow(cfg), "text/plain"),
             };
         }
@@ -2497,7 +2541,7 @@ fn handle(cfg: &Config, mut r: Request) {
             Ok((body, ctype)) => respond(r, 200, body, ctype),
             Err((code, e)) => respond(r, code, err(&e), "application/json"),
         },
-        (Method::Get, "/api/fast") => respond(r, 200, fast(), "text/plain"),
+        (Method::Get, "/api/fast") => respond(r, 200, fast(cfg), "text/plain"),
         (Method::Get, "/api/summary") => {
             let body = summary_for(cfg, &r).to_string();
             respond(r, 200, body, "application/json")
@@ -2861,6 +2905,14 @@ mod tests {
         let list = "En train de lister…\nwazuh-agent/stable 4.14.9-1 amd64 [upgradable from: 4.14.8-1]\nopenssl/trixie-security 3.5.4-1 amd64 [upgradable from: 3.5.1-1]\n";
         let (up, held) = upgradable(list, "wazuh-agent\n");
         assert_eq!((up, held), (vec!["openssl".to_string()], vec!["wazuh-agent".to_string()]));
+    }
+
+    #[test]
+    fn ec_fan_offsets() {
+        assert_eq!(ec_offset("ec:0x76"), Some(0x76));
+        assert_eq!(ec_offset("ec:0xff"), None);
+        assert_eq!(ec_offset("0x76"), None);
+        assert_eq!(ec_offset("ec:0xzz"), None);
     }
 
     #[test]

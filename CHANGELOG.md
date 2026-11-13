@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 (2026-11-13)
+
+- Fan speeds on the System view: every hwmon `fanN_input`, plus fans only the ACPI embedded controller knows (`fans` in the config, read-only `ec_sys` offsets).
+
 ## 0.2.1 (2026-11-08)
 
 - `/api/slow` ends with the SMB shares the panel manages (its `smb_file`), so a dashboard reading it with the summary token sees them too.

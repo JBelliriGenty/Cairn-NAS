@@ -247,7 +247,7 @@ function show(view) {
 
 function fastTick() {
   get("/api/fast").then(out => {
-    const [cpus, mem, netdev, diskstats, arc, temps, misc] = sections(out);
+    const [cpus, mem, netdev, diskstats, arc, temps, misc, fanLines = ""] = sections(out);
     const now = Date.now() / 1000;
     const cpu = cpus.trim().split("\n").map(l => {
       const c = l.trim().split(/\s+/).slice(1, 9).map(Number);
@@ -295,6 +295,7 @@ function fastTick() {
     const [load, up] = misc.trim().split("\n");
     F = {
       m, a, cores, temps: t,
+      fans: fanLines.trim().split("\n").filter(Boolean).map(l => { const i = l.lastIndexOf("|"); return [l.slice(0, i), Number(l.slice(i + 1))]; }),
       cpuT: pkg ? pkg.c : Math.max(0, ...core.map(x => x.c)),
       nvmeT: Object.fromEntries(t.filter(x => x.name === "nvme" && x.label === "Composite").map(x => [x.dev + "n1", x.c])),
       load: load.split(" ").slice(0, 3).map(Number), up: Number(up.split(" ")[0]),
@@ -512,7 +513,9 @@ function renderSystem() {
   F.temps.filter(x => /^(en|eth)/.test(x.name)).forEach(x => rows.push([(UI.labels["nic:" + x.name] || x.name) + " · " + x.label, x.c]));
   Object.keys(F.nvmeT).sort().forEach(d => rows.push([(UI.labels["disk:" + d] || d), F.nvmeT[d]]));
   $("temp-card").innerHTML = '<span class="label">' + t("Temperatures") + '</span><div class="temps">' + rows.map(([n, c]) =>
-    '<div class="meter ' + lvlTemp(c) + '"><span>' + esc(n) + '</span><div class="bar"><i data-w="' + c + '"></i></div><b>' + nf(c, 0) + " °C</b></div>").join("") + "</div>";
+    '<div class="meter ' + lvlTemp(c) + '"><span>' + esc(n) + '</span><div class="bar"><i data-w="' + c + '"></i></div><b>' + nf(c, 0) + " °C</b></div>").join("") + "</div>" +
+    (F.fans.length ? '<span class="label fans-label">' + t("Fans") + '</span><div class="temps fans">' +
+      F.fans.map(([n, rpm]) => '<div class="meter"><span>' + esc(n) + "</span><b>" + nf(rpm, 0) + " " + t("rpm") + "</b></div>").join("") + "</div>" : "");
 }
 
 /* network */

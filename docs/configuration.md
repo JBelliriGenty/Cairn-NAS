@@ -54,6 +54,7 @@ own files are read on each request.
 | `replication` | list | `[]` | replicated datasets shown in Backup, see [`replication`](#replication) |
 | `recycle_days` | number | `30` | days the SMB recycle bin keeps a file (1 minimum) |
 | `nics` | list of `[name, label]` | `[]` | display names of network interfaces, in this order |
+| `fans` | list of `[label, "ec:0xNN"]` | `[]` | fans only the ACPI embedded controller knows (no hwmon driver): 16-bit big-endian speed at that offset of `/sys/kernel/debug/ec/ec0/io` (`ec_sys`, read only). Fans with a hwmon driver (`fanN_input`) are shown without this |
 | `hosts` | object IP → name | `{}` | display names of client machines (NFS clients, SMB sessions), offered when adding an NFS client |
 | `peers` | list | `[]` | other Cairn machines, see [`peers`](#peers) |
 | `peer_unreachable_minutes` | number | `15` | alert when a peer stays unreachable this long |
